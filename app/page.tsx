@@ -316,9 +316,9 @@ export default function Home() {
         <div className="products-top">
           <div>
             <p className="eyebrow">ATRINKTA TAU</p>
-            <h2>Maži <em>džiaugsmai.</em></h2>
+            <h2>Maži <em>džiaugsmai</em></h2>
             <p className="section-intro">
-              Pasirink paslaugą arba atrask jau paruoštą dovaną.
+              Pasirink paslaugą arba atrask jau paruoštą dovaną
             </p>
           </div>
 
@@ -382,8 +382,8 @@ export default function Home() {
         </div>
 
         <p className="catalog-note">
-          Kainos ir produktų aprašymai yra pavyzdiniai. Prieš isigyjant, pasitikrink mūsų katalogą arba susisiek su mumis ir
-          mes padėsim tau išsirinkti.
+          Kainos ir produktų aprašymai yra pavyzdiniai. Prieš įsigyjant, pasitikrink mūsų katalogą arba susisiek su mumis ir
+          mes padėsime jums išsirinkti.
         </p>
       </section>
 
@@ -393,7 +393,7 @@ export default function Home() {
           <h2>
             Dovanoti gera.
             <br />
-            <em>Dovanoti gražiai – dar geriau.</em>
+            <em>Dovanoti gražiai – dar geriau!</em>
           </h2>
           <a className="button button-light" href="#rinkiniai">
             Rinktis dovanų rinkinį <span>↗</span>
@@ -408,8 +408,8 @@ export default function Home() {
         </div>
 
         <div className="about-copy">
-          <p className="eyebrow">APIE GUDRUTES DĖŽUTES</p>
-          <h2>Grožis slypi <em>detalėse.</em></h2>
+          <p className="eyebrow">APIE GUDRUTĖS DĖŽUTES</p>
+          <h2>Grožis slypi <em>detalėse</em></h2>
           <p>
             Tikime, kad dovana prasideda dar prieš ją išpakuojant.
             Nuo popieriaus tekstūros ir švelniai surišto kaspino iki
@@ -812,7 +812,7 @@ export default function Home() {
             <small>D Ė Ž U T Ė S</small>
           </a>
 
-          <p>Pakavimas su meile, sukurta dovanoti.</p>
+          <p>Supakuota su meile, skirta dovanoti.</p>
 
           <div className="footer-links">
             <a href="#paslaugos">Paslaugos</a>

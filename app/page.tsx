@@ -383,7 +383,7 @@ export default function Home() {
 
         <p className="catalog-note">
           Kainos ir produktų aprašymai yra pavyzdiniai. Prieš įsigyjant, pasitikrink mūsų katalogą arba susisiek su mumis ir
-          mes padėsime jums išsirinkti.
+          mes padėsime išsirinkti.
         </p>
       </section>
 
@@ -442,7 +442,7 @@ export default function Home() {
           <div>
             <p className="eyebrow">TAVO PASIRINKIMAI</p>
             <h2 id="cart-title">
-              Dovanų <em>krepšelis.</em>
+              Dovanų <em>krepšelis</em>
             </h2>
           </div>
           <span className="cart-count">{cartCount} prek.</span>
@@ -558,7 +558,7 @@ export default function Home() {
             <h2>
               Turi idėją?
               <br />
-              <em>Sukurkime ją kartu.</em>
+              <em>Sukurkime ją kartu!</em>
             </h2>
             <p>
               Reikia dovanos ypatingai progai, didesnio užsakymo
@@ -581,7 +581,7 @@ export default function Home() {
                 <small>SOCIALINIAI TINKLAI</small>
                 <p>Instagram / Facebook</p>
                 <span className="contact-hint">
-                  Įrašyk savo tikrų paskyrų nuorodas prieš paleidžiant svetainę.
+                   svetainė.
                 </span>
               </div>
             </div>
@@ -812,7 +812,7 @@ export default function Home() {
             <small>D Ė Ž U T Ė S</small>
           </a>
 
-          <p>Supakuota su meile, skirta dovanoti.</p>
+          <p>Dovanos - supakuotos su meile</p>
 
           <div className="footer-links">
             <a href="#paslaugos">Paslaugos</a>
@@ -824,7 +824,7 @@ export default function Home() {
         <div className="footer-bottom">
           <span>© {new Date().getFullYear()} Gudrutės dėžutės</span>
           <a href="#pradzia">Atgal į viršų ↑</a>
-          <span>Sukurta su meile ♡</span>
+       
         </div>
       </footer>
     </main>

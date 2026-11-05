@@ -169,7 +169,7 @@ h1 em, h2 em { color: var(--rose); font-weight: 400; }
 .about-mark { display: grid; min-height: 350px; padding: 35px; place-items: center; background: radial-gradient(ellipse, #fffaf6, #f0dfd3); }
 .about-mark img { width: min(100%, 350px); max-height: 320px; object-fit: contain; mix-blend-mode: multiply; }
 .about-copy h2 { margin: 0 0 22px; font-size: clamp(35px, 3.5vw, 47px); }
-.about-copy > p:not(.eyebrow) { color: var(--brown-light); font-size: 12px; line-height: 1.9; }
+.about-copy > p:not(.eyebrow) { color: var(--brown-light); font-size: 14px; line-height: 1.9; font-family: var(--serif); }
 .about-copy .text-link { margin-top: 13px; }
 
 .quote-section { padding: 58px 20px; background: var(--cream-dark); text-align: center; }

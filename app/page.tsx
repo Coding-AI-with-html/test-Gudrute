@@ -852,7 +852,7 @@ export default function Home() {
             )}
 
             <p className="form-hint">
-              Užklausa bus išsiųsta tiesiai į info@gudrutesdezutes.lt.
+              Atsiųsdami užklausą sutinkate, kad tvarkytume jūsų pateiktus asmens duomenis tikslui atsakyti į jūsų užklausą. Daugiau apie tai skaitykite mūsų privatumo politikoje.
             </p>
           </form>
         </div>

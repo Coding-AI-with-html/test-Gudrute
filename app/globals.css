@@ -255,7 +255,7 @@ h1 em, h2 em { color: var(--rose); font-weight: 400; }
 .contact-form textarea { min-height: 115px; resize: vertical; }
 .contact-form input::placeholder, .contact-form textarea::placeholder { color: #aa9a8e; }
 .contact-submit { width: 100%; margin-top: 19px; }
-.form-hint { color: var(--brown-light); font-size: 10px; line-height: 1.7; }
+.form-hint { color: var(--brown-light); font-size: 12px; line-height: 1.7; }
 .footer { padding: 42px 5.5% 0; background: var(--brown); color: var(--cream); }
 .footer-main { display: flex; align-items: center; justify-content: space-between; gap: 25px; padding-bottom: 30px; }
 .footer-brand { color: var(--cream); }

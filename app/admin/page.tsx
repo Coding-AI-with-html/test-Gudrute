@@ -164,6 +164,45 @@ export default function AdminPage() {
     setError("");
   }
 
+  
+
+async function handleForgotPassword() {
+  setError("");
+  setMessage("");
+
+  if (!email.trim()) {
+    setError("Pirmiausia įrašyk savo el. pašto adresą.");
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    const { error } = await supabase.auth.resetPasswordForEmail(
+      email.trim(),
+      {
+        redirectTo: "https://gudrutesdezutes.lt/reset-password",
+      }
+    );
+
+    if (error) throw error;
+
+    setMessage(
+      "Jeigu šis el. paštas registruotas, išsiuntėme slaptažodžio atkūrimo laišką. Patikrink paštą."
+    );
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : "Nepavyko išsiųsti atkūrimo laiško."
+    );
+  } finally {
+    setLoading(false);
+  }
+}
+
+
+
   function startEdit(product: Product) {
     setEditingId(product.id);
     setFiles([]);
@@ -438,6 +477,19 @@ export default function AdminPage() {
               {loading ? "Jungiamasi..." : "Prisijungti"}
             </button>
           </form>
+          
+            <button
+            type="button"
+            className="secondary"
+            onClick={handleForgotPassword}
+            disabled={loading}
+            >
+            Pamiršau slaptažodį
+            </button>
+
+            {message && <p className="admin-success">{message}</p>}
+            {error && <p className="admin-error">{error}</p>}
+
 
           {error && <p className="admin-error">{error}</p>}
           <a href="/">Grįžti į svetainę</a>

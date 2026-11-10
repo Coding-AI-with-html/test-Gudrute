@@ -245,8 +245,8 @@ h1 em, h2 em { color: var(--rose); font-weight: 400; }
 .contact-copy > p:not(.eyebrow) { max-width: 400px; color: var(--brown-light); font-size: 12px; line-height: 1.9; }
 .contact-detail { display: flex; align-items: flex-start; gap: 14px; margin-top: 27px; }
 .contact-icon { display: grid; width: 39px; height: 39px; flex-shrink: 0; place-items: center; border: 1px solid #d7bbae; border-radius: 50%; color: var(--rose); font-size: 18px; }
-.contact-detail small { display: block; margin-bottom: 7px; color: var(--brown-light); font-size: 9px; letter-spacing: .14em; }
-.contact-detail a, .contact-detail p { margin: 0; font-size: 12px; }
+.contact-detail small { display: block; margin-bottom: 7px; color: var(--brown-light); font-size: 12px; letter-spacing: .14em; }
+.contact-detail a, .contact-detail p { margin: 0; font-size: 13px; }
 .contact-hint { display: block; margin-top: 6px; color: var(--brown-light); font-size: 10px; line-height: 1.6; }
 .contact-form { padding: 29px; border: 1px solid rgb(232 217 205 / 90%); background: var(--white); box-shadow: var(--shadow); }
 .contact-form .eyebrow { margin-bottom: 22px; }

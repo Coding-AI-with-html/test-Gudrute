@@ -3,6 +3,10 @@
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { createSupabaseClient } from "@/lib/supabase/client";
+import {
+  PACKAGING_CHOICES,
+  type PackagingChoice,
+} from "@/lib/products";
 
 type Product = {
   id: number;
@@ -15,6 +19,7 @@ type Product = {
   is_active: boolean;
   sort_order: number;
   packaging_mode: "none" | "fixed_paper_box" | "fixed_basket" | "custom";
+  packaging_choices: PackagingChoice[];
 };
 
 type EditorForm = {
@@ -27,6 +32,7 @@ type EditorForm = {
   is_active: boolean;
   sort_order: string;
   packaging_mode: Product["packaging_mode"];
+  packaging_choices: PackagingChoice[];
 };
 
 const emptyForm: EditorForm = {
@@ -39,6 +45,7 @@ const emptyForm: EditorForm = {
   is_active: true,
   sort_order: "0",
   packaging_mode: "none",
+  packaging_choices: [],
 };
 
 function getStoragePath(url: string): string | null {
@@ -217,6 +224,7 @@ async function handleForgotPassword() {
       is_active: product.is_active,
       sort_order: String(product.sort_order ?? 0),
       packaging_mode: product.packaging_mode ?? "none",
+      packaging_choices: product.packaging_choices ?? [],
     });
 
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -242,7 +250,12 @@ async function handleForgotPassword() {
       }
 
       const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
-      const path = `${crypto.randomUUID()}.${extension}`;
+      const uniqueId =
+        typeof globalThis.crypto?.randomUUID === "function"
+          ? globalThis.crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+
+      const path = `${uniqueId}.${extension}`;
 
       const { data, error } = await supabase.storage
         .from("product-images")
@@ -297,6 +310,13 @@ async function handleForgotPassword() {
       setError("Pridėk bent vieną produkto nuotrauką.");
       return;
     }
+    if (
+      form.category === "Pakavimo paslaugos" &&
+      form.packaging_choices.length === 0
+    ) {
+      setError("Pasirink bent vieną pakavimo būdą.");
+      return;
+    }
 
     setLoading(true);
 
@@ -308,6 +328,11 @@ async function handleForgotPassword() {
 
       const imageUrls = [...form.image_urls, ...uploaded.urls];
 
+      const selectedChoices =
+        form.category === "Pakavimo paslaugos"
+          ? form.packaging_choices
+          : [];
+
       const payload = {
         name: form.name.trim(),
         category: form.category,
@@ -317,10 +342,20 @@ async function handleForgotPassword() {
         image_urls: imageUrls,
         is_active: form.is_active,
         sort_order: Number(form.sort_order) || 0,
+
+        packaging_choices: selectedChoices,
+
         packaging_mode:
           form.category === "Dovanų rinkiniai"
             ? "none"
-            : form.packaging_mode,
+            : selectedChoices.length === 1 &&
+                selectedChoices[0] === "Popierinė dėžutė"
+              ? "fixed_paper_box"
+              : selectedChoices.length === 1 &&
+                  selectedChoices[0] === "Pintas krepšelis"
+                ? "fixed_basket"
+                : "custom",
+
         updated_at: new Date().toISOString(),
       };
 
@@ -538,15 +573,23 @@ async function handleForgotPassword() {
                 Kategorija
                 <select
                   value={form.category}
-                  onChange={(e) => {
-                    const category = e.target.value as Product["category"];
-                    setForm({
-                      ...form,
-                      category,
-                      packaging_mode: category === "Pakavimo paslaugos" ? "custom" : "none",
-                    });
-                  }}
-                >
+                 onChange={(e) => {
+                  const category = e.target.value as Product["category"];
+
+                  setForm((current) => ({
+                    ...current,
+                    category,
+                    packaging_mode:
+                      category === "Pakavimo paslaugos" ? "custom" : "none",
+                    packaging_choices:
+                      category === "Pakavimo paslaugos"
+                        ? current.packaging_choices.length
+                          ? current.packaging_choices
+                          : ["Popierinė dėžutė"]
+                        : [],
+                  }));
+                }}
+                                >
                   <option>Pakavimo paslaugos</option>
                   <option>Dovanų rinkiniai</option>
                 </select>
@@ -566,21 +609,35 @@ async function handleForgotPassword() {
             </div>
 
             {form.category === "Pakavimo paslaugos" && (
-              <label>
-                Pakavimo pasirinkimas
-                <select
-                  value={form.packaging_mode}
-                  onChange={(e) => setForm({
-                    ...form,
-                    packaging_mode: e.target.value as Product["packaging_mode"],
-                  })}
-                >
-                  <option value="fixed_paper_box">Popierinė dėžutė</option>
-                  <option value="fixed_basket">Pintas krepšelis</option>
-                  <option value="custom">Individualus pasirinkimas</option>
-                </select>
-              </label>
-            )}
+            <div className="admin-packaging-options">
+              <strong>Pakavimo pasirinkimas</strong>
+
+              <p>
+                Pažymėk visus įpakavimo būdus, kuriuos klientas
+                galės pasirinkti šiai paslaugai.
+              </p>
+
+              {PACKAGING_CHOICES.map((choice) => (
+                <label className="admin-checkbox" key={choice}>
+                  <input
+                    type="checkbox"
+                    checked={form.packaging_choices.includes(choice)}
+                    onChange={(e) => {
+                      setForm((current) => ({
+                        ...current,
+                        packaging_choices: e.target.checked
+                          ? [...current.packaging_choices, choice]
+                          : current.packaging_choices.filter(
+                              (item) => item !== choice
+                            ),
+                      }));
+                    }}
+                  />
+                  {choice}
+                </label>
+              ))}
+            </div>
+          )}
 
             <label>
               Trumpa etiketė (nebūtina)
@@ -603,17 +660,81 @@ async function handleForgotPassword() {
 
             <label>
               Nuotraukos (JPG, PNG arba WEBP, iki 5 MB kiekviena)
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                multiple
-                onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-              />
+              
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              multiple
+              onChange={(e) => {
+                const selectedFiles = Array.from(e.currentTarget.files ?? []);
+
+                setFiles((current) => {
+                  const known = new Set(
+                    current.map(
+                      (file) => `${file.name}-${file.size}-${file.lastModified}`
+                    )
+                  );
+
+                  const additions = selectedFiles.filter((file) => {
+                    const key = `${file.name}-${file.size}-${file.lastModified}`;
+
+                    if (known.has(key)) return false;
+
+                    known.add(key);
+                    return true;
+                  });
+
+                  return [...current, ...additions];
+                });
+
+                // Leidžia vėl pasirinkti tą patį failą.
+                e.currentTarget.value = "";
+              }}
+            />
+
             </label>
 
+            
             {files.length > 0 && (
-              <p className="admin-help">Pasirinkta naujų nuotraukų: {files.length}</p>
+              <div className="admin-new-files">
+                <strong>
+                  Pasirinkta naujų nuotraukų: {files.length}
+                </strong>
+
+                {files.map((file, index) => (
+                  <div
+                    className="admin-new-file"
+                    key={`${file.name}-${file.lastModified}-${index}`}
+                  >
+                    <span>
+                      {file.name} (
+                      {(file.size / 1024 / 1024).toFixed(2)} MB)
+                    </span>
+
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() =>
+                        setFiles((current) =>
+                          current.filter((_, i) => i !== index)
+                        )
+                      }
+                    >
+                      Pašalinti
+                    </button>
+                  </div>
+                ))}
+
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setFiles([])}
+                >
+                  Pašalinti visas naujas nuotraukas
+                </button>
+              </div>
             )}
+
 
             {form.image_urls.length > 0 && (
               <div className="admin-image-list">
@@ -762,6 +883,21 @@ function AdminStyles() {
       .admin-header, .admin-header-actions, .admin-list-heading {
         display: flex; align-items: center; justify-content: space-between; gap: 15px;
       }
+      .admin-packaging-options {
+        display: grid;
+        gap: 12px;
+        padding: 16px;
+        border: 1px solid #e5e0d7;
+        border-radius: 10px;
+        background: #f7f5f1;
+      }
+
+      .admin-packaging-options p {
+        margin: 0;
+        color: #81796d;
+        font-size: 13px;
+        line-height: 1.5;
+      }
       .admin-header { margin-bottom: 25px; }
       .admin-header h1 { font-size: clamp(25px, 4vw, 36px); margin: 5px 0; }
       .admin-header p { color: #777; }
@@ -777,6 +913,9 @@ function AdminStyles() {
       .admin-checkbox input { width: 18px; height: 18px; }
       .admin-form-actions { display: flex; gap: 10px; flex-wrap: wrap; }
       .admin-image-list { display: flex; gap: 12px; flex-wrap: wrap; }
+      .admin-new-files {display: grid;gap: 10px;padding: 14px;background: #f7f5f1;border-radius: 10px;}
+      .admin-new-file {display: flex;align-items: center;justify-content: space-between;gap: 12px;padding: 8px 0;border-bottom: 1px solid #e5e0d7;font-size: 13px;overflow-wrap: anywhere;}
+      .admin-new-file button {flex-shrink: 0;}
       .admin-image { width: 115px; }
       .admin-image img { width: 115px; height: 100px; object-fit: cover; border-radius: 8px; }
       .admin-image button { width: 100%; margin-top: 5px; padding: 7px; font-size: 12px; background: #8b4141; }

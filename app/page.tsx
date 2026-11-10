@@ -1,16 +1,17 @@
 
 "use client";
 
-import { useState, type FormEvent } from "react";
+import {
+  useState,
+  useEffect,
+  useMemo,
+  type FormEvent,
+} from "react";
 
-type PackagingChoice =
-  | "Popierinė dėžutė"
-  | "Pintas krepšelis"
-  | "Medinė dėžutė"
-  | "Medžiaginis maišelis"
-  | "Skaidri celofaninė / PP plėvelė"
-  | "Popierius ir kaspinas"
-  | "Kitas variantas";
+import { createSupabaseClient } from "@/lib/supabase/client";
+import {
+  type PackagingChoice,
+} from "@/lib/products";
 
 type Product = {
   id: number;
@@ -19,7 +20,14 @@ type Product = {
   price: number;
   description: string;
   image: string;
+  image_urls: string[];
   label: string;
+  packaging_mode:
+    | "none"
+    | "fixed_paper_box"
+    | "fixed_basket"
+    | "custom";
+  packaging_choices: PackagingChoice[];
 };
 
 type PackagingConfig = {
@@ -44,87 +52,21 @@ type CartItem = {
 // Pakeisk šią sumą į tikrą palinkėjimo kortelės kainą.
 const greetingCardPrice = 2.0;
 
-// Pasirinkimai skirti PAKAVIMO PASLAUGOMS (produktai 1–3), o ne dovanų rinkiniams.
-const initialPackagingConfigs: Record<number, PackagingConfig> = {
-  1: {
-    packaging: "Popierinė dėžutė",
-    packagingNote: "",
-    itemNote: "",
-    giftCard: false,
-    giftMessage: "",
-  },
-  2: {
-    packaging: "Pintas krepšelis",
-    packagingNote: "",
-    itemNote: "",
-    giftCard: false,
-    giftMessage: "",
-  },
-  3: {
-    packaging: "Popierinė dėžutė",
-    packagingNote: "",
-    itemNote: "",
-    giftCard: false,
-    giftMessage: "",
-  },
-};
 
-const products: Product[] = [
-  {
-    id: 1,
-    name: "Klasikinis įpakavimas",
-    category: "Pakavimo paslaugos",
-    price: 8.9,
-    description: "Tavo pasirinktą daiktą supakuojame į popierinę dovanų dėžutę, papuošiame užpildu ir kaspinu.",
-    image: "/images/klasikinis-pakavimas.jpg",
-    label: "Kasdieniam džiaugsmui",
-  },
-  {
-    id: 2,
-    name: "Prabangus įpakavimas",
-    category: "Pakavimo paslaugos",
-    price: 14.9,
-    description: "Dovaną estetiškai pateikiame pintame krepšelyje ir dekoruojame kaspinu. Tinka ir keliems derantiems daiktams.",
-    image: "/images/prabangus-pakavimas.jpg",
-    label: "Klientų pamėgtas",
-  },
-  {
-    id: 3,
-    name: "Individualus įpakavimas",
-    category: "Pakavimo paslaugos",
-    price: 12.9,
-    description: "Vieno daikto ar ypatingos dovanos įpakavimas pagal tavo norus – nuo medinės dėžutės iki skaidrios plėvelės ir kaspino.",
-    image: "/images/personalizuota-dovana.jpg",
-    label: "Asmeniška",
-  },
-  {
-    id: 4,
-    name: "Klasikinis dovanų rinkinys",
-    category: "Dovanų rinkiniai",
-    price: 34.9,
-    description: "Kruopščiai suderinta dovana, supakuota į elegantišką popierinę dėžutę.",
-    image: "/images/kaledu-jaukumo-rinkinys.jpg",
-    label: "Dovanai paruošta",
-  },
-  {
-    id: 5,
-    name: "Personalizuotas dovanų rinkinys",
-    category: "Dovanų rinkiniai",
-    price: 29.9,
-    description: "Rinkinys pagal tavo norus – pasirink turinį, įpakavimą ir aprašyk savo idėją.",
-    image: "/images/saldziu-akimirku-rinkinys.jpg",
-    label: "Sukurtas pagal tave",
-  },
-  {
-    id: 6,
-    name: "Prabangus dovanų rinkinys",
-    category: "Dovanų rinkiniai",
-    price: 49.9,
-    description: "Išskirtinis dovanų rinkinys, estetiškai sudėtas į pintą krepšelį.",
-    image: "/images/prabangus-dovanu-rinkinys.jpg",
-    label: "Ypatingai progai",
-  },
-];
+
+function createPackagingConfig(product: Product): PackagingConfig {
+  return {
+    packaging:
+      product.packaging_choices?.[0] ?? "Popierinė dėžutė",
+    packagingNote: "",
+    itemNote: "",
+    giftCard: false,
+    giftMessage: "",
+  };
+}
+
+
+
 
 const categories = [
   "Pakavimo paslaugos",
@@ -141,8 +83,22 @@ const money = (amount: number) =>
   }).format(amount);
 
 export default function Home() {
+  
+  const supabase = useMemo(() => createSupabaseClient(), []);
+
+  const [products, setProducts] = useState<Product[]>([]);
+  const [productsLoading, setProductsLoading] = useState(true);
+  const [productsError, setProductsError] = useState("");
+
+  const [packagingConfigs, setPackagingConfigs] = useState<
+    Record<number, PackagingConfig>
+  >({});
+
+  const [activeImages, setActiveImages] = useState<
+    Record<number, number>
+  >({});
+
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [packagingConfigs, setPackagingConfigs] = useState<Record<number, PackagingConfig>>(initialPackagingConfigs);
   const [filter, setFilter] = useState<Category>("Pakavimo paslaugos");
   const [menuOpen, setMenuOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
@@ -150,11 +106,108 @@ export default function Home() {
   const [contactSent, setContactSent] = useState(false);
   const [contactSending, setContactSending] = useState(false);
   const [contactError, setContactError] = useState("");
+  
+  useEffect(() => {
+    let active = true;
 
-  const visibleProducts = products.filter(
+    async function loadProducts() {
+      setProductsLoading(true);
+      setProductsError("");
+
+      try {
+        const { data, error } = await supabase
+          .from("products")
+          .select(
+            "id, name, category, price, description, image_urls, label, packaging_mode, packaging_choices"
+          )
+          .eq("is_active", true)
+          .order("sort_order", { ascending: true })
+          .order("id", { ascending: true });
+
+        if (error) throw error;
+
+        if (!active) return;
+
+        type ProductRow = {
+          id: number;
+          name: string;
+          category: Product["category"];
+          price: number | string;
+          description: string;
+          image_urls: string[] | null;
+          label: string | null;
+          packaging_mode: Product["packaging_mode"] | null;
+          packaging_choices: PackagingChoice[] | null;
+        };
+
+        const rows = (data ?? []) as ProductRow[];
+
+        const mappedProducts: Product[] = rows.map((row) => {
+          const imageUrls = row.image_urls ?? [];
+
+          return {
+            id: Number(row.id),
+            name: row.name,
+            category: row.category,
+            price: Number(row.price),
+            description: row.description,
+            image_urls: imageUrls,
+            image: imageUrls[0] || "/logo.png",
+            label: row.label ?? "",
+            packaging_mode: row.packaging_mode ?? "none",
+            packaging_choices: row.packaging_choices ?? [],
+          };
+        });
+
+        setProducts(mappedProducts);
+
+        setPackagingConfigs((current) => {
+          const next = { ...current };
+
+          mappedProducts.forEach((product) => {
+            if (
+              product.category === "Pakavimo paslaugos" &&
+              !next[product.id]
+            ) {
+              next[product.id] = createPackagingConfig(product);
+            }
+          });
+
+          return next;
+        });
+      } catch (error) {
+        if (active) {
+          setProductsError(
+            error instanceof Error
+              ? error.message
+              : "Nepavyko įkelti produktų."
+          );
+        }
+      } finally {
+        if (active) setProductsLoading(false);
+      }
+    }
+
+    void loadProducts();
+
+    return () => {
+      active = false;
+    };
+  }, [supabase]);
+
+
+    const visibleProducts = products.filter(
     (product) =>
       filter === "Visos prekės" || product.category === filter
   );
+
+  const firstPackagingProductId = products.find(
+    (product) => product.category === "Pakavimo paslaugos"
+  )?.id;
+
+  const firstGiftSetProductId = products.find(
+    (product) => product.category === "Dovanų rinkiniai"
+  )?.id;
 
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -164,10 +217,20 @@ export default function Home() {
     return sum + unitPrice * item.quantity;
   }, 0);
 
-  function updatePackagingConfig(id: number, changes: Partial<PackagingConfig>) {
+    function updatePackagingConfig(
+    id: number,
+    changes: Partial<PackagingConfig>
+  ) {
+    const product = products.find((item) => item.id === id);
+
+    if (!product) return;
+
     setPackagingConfigs((current) => ({
       ...current,
-      [id]: { ...current[id], ...changes },
+      [id]: {
+        ...(current[id] ?? createPackagingConfig(product)),
+        ...changes,
+      },
     }));
   }
 
@@ -176,7 +239,10 @@ export default function Home() {
     if (!product) return;
 
     // Konfigūracija taikoma tik trims pakavimo paslaugoms, ne dovanų rinkiniams.
-    const config = product.category === "Pakavimo paslaugos" ? packagingConfigs[id] : undefined;
+    const config =
+    product.category === "Pakavimo paslaugos"
+      ? packagingConfigs[id] ?? createPackagingConfig(product)
+      : undefined;
 
     if (config && !config.itemNote.trim()) {
       setNotice("Parašyk, kokį daiktą reikės supakuoti ir nurodyk apytikslį jo dydį.");
@@ -453,132 +519,246 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="product-grid">
-          {visibleProducts.map((product) => (
-            <article
-              className="product-card"
-              key={product.id}
-              id={product.id === 1 ? "pakavimas" : product.id === 4 ? "rinkiniai" : undefined}
-            >
-              <div className="product-image">
-                <img
-                  src={product.image}
-                  alt={product.name}
-                  loading="lazy"
-                  onError={(event) => {
-                    event.currentTarget.style.display = "none";
-                  }}
-                />
-                <span className="product-label">{product.label}</span>
-                <span className="product-category">{product.category}</span>
-              </div>
+        {productsLoading && (
+          <p className="catalog-note">Įkeliame produktus...</p>
+        )}
 
-              <div className="product-info">
-                <div>
-                  <h3>{product.name}</h3>
-                  <p>{product.description}</p>
+        {productsError && (
+          <p className="form-hint" role="alert">
+            Nepavyko įkelti produktų: {productsError}
+          </p>
+        )}
+
+        {!productsLoading && !productsError && visibleProducts.length === 0 && (
+          <p className="catalog-note">
+            Šioje kategorijoje produktų šiuo metu nėra.
+          </p>
+        )}
+
+        
+        <div className="product-grid">
+          {visibleProducts.map((product) => {
+            const config =
+              packagingConfigs[product.id] ?? createPackagingConfig(product);
+            const packagingChoices = product.packaging_choices?.length
+              ? product.packaging_choices
+              : ["Popierinė dėžutė" as PackagingChoice];
+
+            const imageIndex = Math.min(
+              activeImages[product.id] ?? 0,
+              Math.max(0, product.image_urls.length - 1)
+            );
+
+            return (
+              <article
+                className="product-card"
+                key={product.id}
+                id={
+                  product.id === firstPackagingProductId
+                    ? "pakavimas"
+                    : product.id === firstGiftSetProductId
+                      ? "rinkiniai"
+                      : undefined
+                }
+              >
+                <div className="product-image">
+                  <img
+                    src={product.image_urls[imageIndex] || product.image}
+                    alt={product.name}
+                    loading="lazy"
+                    onError={(event) => {
+                      event.currentTarget.style.display = "none";
+                    }}
+                  />
+
+                  <span className="product-label">{product.label}</span>
+                  <span className="product-category">{product.category}</span>
                 </div>
 
-                {product.category === "Pakavimo paslaugos" && (
+                {product.image_urls.length > 1 && (
+                  <div
+                    className="product-thumbnails"
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      flexWrap: "wrap",
+                      margin: "10px 0",
+                    }}
+                  >
+                    {product.image_urls.map((url, index) => (
+                      <button
+                        key={`${url}-${index}`}
+                        type="button"
+                        aria-label={`Rodyti ${product.name} nuotrauką ${index + 1}`}
+                        onClick={() =>
+                          setActiveImages((current) => ({
+                            ...current,
+                            [product.id]: index,
+                          }))
+                        }
+                        style={{
+                          padding: 0,
+                          background: "transparent",
+                          border:
+                            imageIndex === index
+                              ? "2px solid #292722"
+                              : "1px solid #ddd",
+                          borderRadius: 8,
+                          overflow: "hidden",
+                        }}
+                      >
+                        <img
+                          src={url}
+                          alt=""
+                          style={{
+                            display: "block",
+                            width: 55,
+                            height: 55,
+                            objectFit: "cover",
+                          }}
+                        />
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <div className="product-info">
+                  <div>
+                    <h3>{product.name}</h3>
+                    <p>{product.description}</p>
+                  </div>
+
+                  {product.category === "Pakavimo paslaugos" && (
                   <div className="product-options">
-                    {product.id === 1 && (
-                      <p className="package-fixed">Pasirinktas tipas: <strong>popierinė dovanų dėžutė</strong></p>
-                    )}
-                    {product.id === 2 && (
-                      <p className="package-fixed">Pasirinktas tipas: <strong>pintas krepšelis</strong></p>
-                    )}
-                    {product.id === 3 && (
+                    {packagingChoices.length === 1 &&
+                    packagingChoices[0] !== "Kitas variantas" ? (
+                      <p className="package-fixed">
+                        Pasirinktas tipas: <strong>{packagingChoices[0]}</strong>
+                      </p>
+                    ) : (
                       <>
-                        <label htmlFor={`packaging-${product.id}`}>Kokio įpakavimo norėtum?</label>
+                        <label htmlFor={`packaging-${product.id}`}>
+                          Kokio įpakavimo norėtum?
+                        </label>
+
                         <select
                           id={`packaging-${product.id}`}
-                          value={packagingConfigs[product.id].packaging}
-                          onChange={(event) => updatePackagingConfig(product.id, {
-                            packaging: event.target.value as PackagingChoice,
-                            packagingNote: event.target.value === "Kitas variantas" ? packagingConfigs[product.id].packagingNote : "",
-                          })}
+                          value={config.packaging}
+                          onChange={(event) =>
+                            updatePackagingConfig(product.id, {
+                              packaging: event.target.value as PackagingChoice,
+                              packagingNote:
+                                event.target.value === "Kitas variantas"
+                                  ? config.packagingNote
+                                  : "",
+                            })
+                          }
                         >
-                          <option value="Popierinė dėžutė">Popierinė dėžutė</option>
-                          <option value="Pintas krepšelis">Pintas krepšelis</option>
-                          <option value="Medinė dėžutė">Medinė dėžutė</option>
-                          <option value="Medžiaginis maišelis">Medžiaginis maišelis</option>
-                          <option value="Skaidri celofaninė / PP plėvelė">Skaidri celofaninė / PP plėvelė</option>
-                          <option value="Popierius ir kaspinas">Popierius ir kaspinas</option>
-                          <option value="Kitas variantas">Kitas variantas</option>
+                          {packagingChoices.map((choice) => (
+                            <option key={choice} value={choice}>
+                              {choice}
+                            </option>
+                          ))}
                         </select>
-                        {packagingConfigs[product.id].packaging === "Kitas variantas" && (
-                          <>
-                            <label htmlFor={`packaging-note-${product.id}`}>Aprašyk savo įpakavimo idėją</label>
-                            <textarea
-                              id={`packaging-note-${product.id}`}
-                              rows={2}
-                              value={packagingConfigs[product.id].packagingNote}
-                              onChange={(event) => updatePackagingConfig(product.id, {
-                                packagingNote: event.target.value,
-                              })}
-                              placeholder="Pvz., nestandartinė dėžutė, audinys, ypatingas kaspinas..."
-                            />
-                          </>
-                        )}
                       </>
                     )}
 
-                    <label htmlFor={`item-note-${product.id}`}>Ką reikės supakuoti?</label>
+                    {config.packaging === "Kitas variantas" && (
+                      <>
+                        <label htmlFor={`packaging-note-${product.id}`}>
+                          Aprašyk savo įpakavimo idėją
+                        </label>
+
+                        <textarea
+                          id={`packaging-note-${product.id}`}
+                          rows={2}
+                          value={config.packagingNote}
+                          onChange={(event) =>
+                            updatePackagingConfig(product.id, {
+                              packagingNote: event.target.value,
+                            })
+                          }
+                          placeholder="Pvz., nestandartinė dėžutė, audinys, ypatingas kaspinas..."
+                        />
+                      </>
+                    )}
+
+                    <label htmlFor={`item-note-${product.id}`}>
+                      Ką reikės supakuoti?
+                    </label>
+
                     <textarea
                       id={`item-note-${product.id}`}
                       rows={2}
-                      value={packagingConfigs[product.id].itemNote}
-                      onChange={(event) => updatePackagingConfig(product.id, {
-                        itemNote: event.target.value,
-                      })}
-                      placeholder="Daikto pavadinimas ir apytikslis dydis, pvz., knyga  A5 formato arba kosmetikos rinkinys..."
+                      value={config.itemNote}
+                      onChange={(event) =>
+                        updatePackagingConfig(product.id, {
+                          itemNote: event.target.value,
+                        })
+                      }
+                      placeholder="Daikto pavadinimas ir apytikslis dydis, pvz., knyga A5 formato arba kosmetikos rinkinys..."
                     />
 
                     <label className="gift-card-toggle">
                       <input
                         type="checkbox"
-                        checked={packagingConfigs[product.id].giftCard}
-                        onChange={(event) => updatePackagingConfig(product.id, {
-                          giftCard: event.target.checked,
-                          giftMessage: event.target.checked ? packagingConfigs[product.id].giftMessage : "",
-                        })}
+                        checked={config.giftCard}
+                        onChange={(event) =>
+                          updatePackagingConfig(product.id, {
+                            giftCard: event.target.checked,
+                            giftMessage: event.target.checked
+                              ? config.giftMessage
+                              : "",
+                          })
+                        }
                       />
                       Pridėti palinkėjimo kortelę (+ {money(greetingCardPrice)})
                     </label>
 
-                    {packagingConfigs[product.id].giftCard && (
+                    {config.giftCard && (
                       <>
-                        <label htmlFor={`greeting-${product.id}`}>Tavo palinkėjimas</label>
+                        <label htmlFor={`greeting-${product.id}`}>
+                          Tavo palinkėjimas
+                        </label>
+
                         <textarea
                           id={`greeting-${product.id}`}
                           rows={2}
                           required
-                          value={packagingConfigs[product.id].giftMessage}
-                          onChange={(event) => updatePackagingConfig(product.id, {
-                            giftMessage: event.target.value,
-                          })}
+                          value={config.giftMessage}
+                          onChange={(event) =>
+                            updatePackagingConfig(product.id, {
+                              giftMessage: event.target.value,
+                            })
+                          }
                           placeholder="Parašyk savo žodžius..."
                         />
-                        <small className="option-hint">Pvz., „Su meile ir šilčiausiais linkėjimais!“ arba „Tegul ši dovana atneša daug džiaugsmo.“</small>
+
+                        <small className="option-hint">
+                          Pvz., „Su meile ir šilčiausiais linkėjimais!“
+                        </small>
                       </>
                     )}
                   </div>
                 )}
 
-                <div className="product-buy">
-                  <strong>{money(product.price)}</strong>
-                  <button
-                    className="add-button"
-                    onClick={() => addToCart(product.id)}
-                    aria-label={`Įdėti „${product.name}“ į krepšelį`}
-                  >
-                    +
-                  </button>
+                  <div className="product-buy">
+                    <strong>{money(product.price)}</strong>
+
+                    <button
+                      className="add-button"
+                      onClick={() => addToCart(product.id)}
+                      aria-label={`Įdėti „${product.name}“ į krepšelį`}
+                    >
+                      +
+                    </button>
+                  </div>
                 </div>
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
         </div>
+
 
         <p className="catalog-note">
           Kainos ir produktų aprašymai yra pavyzdiniai. Prieš įsigyjant, pasitikrink mūsų katalogą arba susisiek su mumis ir
@@ -784,7 +964,7 @@ export default function Home() {
                 <small>SOCIALINIAI TINKLAI</small>
                 <p>Instagram / Facebook</p>
                 <span className="contact-hint">
-                   svetainė.
+                   
                 </span>
               </div>
             </div>

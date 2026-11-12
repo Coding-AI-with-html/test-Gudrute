@@ -3,10 +3,14 @@
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { createSupabaseClient } from "@/lib/supabase/client";
-import {
-  PACKAGING_CHOICES,
-  type PackagingChoice,
-} from "@/lib/products";
+
+type PackagingOption = {
+  id: number;
+  name: string;
+  price: number | null;
+  is_active: boolean;
+  sort_order: number;
+};
 
 type Product = {
   id: number;
@@ -19,7 +23,8 @@ type Product = {
   is_active: boolean;
   sort_order: number;
   packaging_mode: "none" | "fixed_paper_box" | "fixed_basket" | "custom";
-  packaging_choices: PackagingChoice[];
+  packaging_choices: string[];
+  packaging_option_ids: number[];
 };
 
 type EditorForm = {
@@ -32,7 +37,7 @@ type EditorForm = {
   is_active: boolean;
   sort_order: string;
   packaging_mode: Product["packaging_mode"];
-  packaging_choices: PackagingChoice[];
+  packaging_option_ids: number[];
 };
 
 const emptyForm: EditorForm = {
@@ -45,7 +50,7 @@ const emptyForm: EditorForm = {
   is_active: true,
   sort_order: "0",
   packaging_mode: "none",
-  packaging_choices: [],
+  packaging_option_ids: [],
 };
 
 function getStoragePath(url: string): string | null {
@@ -74,6 +79,10 @@ export default function AdminPage() {
   const [password, setPassword] = useState("");
 
   const [products, setProducts] = useState<Product[]>([]);
+  const [packagingOptions, setPackagingOptions] = useState<PackagingOption[]>([]);
+  const [packagingOptionName, setPackagingOptionName] = useState("");
+  const [packagingOptionPrice, setPackagingOptionPrice] = useState("");
+  const [editingPackagingOptionId, setEditingPackagingOptionId] = useState<number | null>(null);
   const [form, setForm] = useState<EditorForm>(emptyForm);
   const [files, setFiles] = useState<File[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -82,19 +91,56 @@ export default function AdminPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
-  const loadProducts = useCallback(async () => {
+  const loadPackagingOptions = useCallback(async () => {
     const { data, error } = await supabase
-      .from("products")
-      .select("*")
+      .from("packaging_options")
+      .select("id, name, price, is_active, sort_order")
       .order("sort_order", { ascending: true })
-      .order("id", { ascending: true });
+      .order("name", { ascending: true });
+
+    if (error) {
+      setError("Nepavyko įkelti pakavimo būdų: " + error.message);
+      return;
+    }
+
+    setPackagingOptions((data ?? []) as PackagingOption[]);
+  }, [supabase]);
+
+  const loadProducts = useCallback(async () => {
+    const [{ data, error }, { data: links, error: linksError }] = await Promise.all([
+      supabase
+        .from("products")
+        .select("*")
+        .order("sort_order", { ascending: true })
+        .order("id", { ascending: true }),
+      supabase
+        .from("product_packaging_options")
+        .select("product_id, packaging_option_id"),
+    ]);
 
     if (error) {
       setError("Nepavyko įkelti produktų: " + error.message);
       return;
     }
+    if (linksError) {
+      setError("Nepavyko įkelti produktų pakavimo būdų: " + linksError.message);
+      return;
+    }
 
-    setProducts((data ?? []) as Product[]);
+    const idsByProduct = new Map<number, number[]>();
+    (links ?? []).forEach((link: { product_id: number; packaging_option_id: number }) => {
+      const current = idsByProduct.get(Number(link.product_id)) ?? [];
+      current.push(Number(link.packaging_option_id));
+      idsByProduct.set(Number(link.product_id), current);
+    });
+
+    setProducts(
+      (data ?? []).map((row: any) => ({
+        ...row,
+        packaging_choices: row.packaging_choices ?? [],
+        packaging_option_ids: idsByProduct.get(Number(row.id)) ?? [],
+      })) as Product[]
+    );
   }, [supabase]);
 
   useEffect(() => {
@@ -115,7 +161,7 @@ export default function AdminPage() {
         setError(error.message);
       } else if (data.session?.user.id === adminUid) {
         setIsAdmin(true);
-        await loadProducts();
+        await Promise.all([loadProducts(), loadPackagingOptions()]);
       } else if (data.session) {
         await supabase.auth.signOut();
       }
@@ -128,7 +174,7 @@ export default function AdminPage() {
     return () => {
       alive = false;
     };
-  }, [supabase, adminUid, loadProducts]);
+  }, [supabase, adminUid, loadProducts, loadPackagingOptions]);
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -155,7 +201,7 @@ export default function AdminPage() {
       setIsAdmin(true);
       setPassword("");
       setMessage("Sėkmingai prisijungei!");
-      await loadProducts();
+      await Promise.all([loadProducts(), loadPackagingOptions()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Prisijungti nepavyko.");
     } finally {
@@ -167,6 +213,7 @@ export default function AdminPage() {
     await supabase.auth.signOut();
     setIsAdmin(false);
     setProducts([]);
+    setPackagingOptions([]);
     setMessage("");
     setError("");
   }
@@ -224,7 +271,7 @@ async function handleForgotPassword() {
       is_active: product.is_active,
       sort_order: String(product.sort_order ?? 0),
       packaging_mode: product.packaging_mode ?? "none",
-      packaging_choices: product.packaging_choices ?? [],
+      packaging_option_ids: product.packaging_option_ids ?? [],
     });
 
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -310,17 +357,19 @@ async function handleForgotPassword() {
       setError("Pridėk bent vieną produkto nuotrauką.");
       return;
     }
-    if (
-      form.category === "Pakavimo paslaugos" &&
-      form.packaging_choices.length === 0
-    ) {
-      setError("Pasirink bent vieną pakavimo būdą.");
+    const selectedOptions = packagingOptions.filter(
+      (option) => form.packaging_option_ids.includes(option.id) && option.is_active
+    );
+
+    if (form.category === "Pakavimo paslaugos" && selectedOptions.length === 0) {
+      setError("Pasirink bent vieną aktyvų pakavimo būdą.");
       return;
     }
 
     setLoading(true);
 
     let uploadedPaths: string[] = [];
+    let productSaved = false;
 
     try {
       const uploaded = await uploadImages(files);
@@ -328,10 +377,11 @@ async function handleForgotPassword() {
 
       const imageUrls = [...form.image_urls, ...uploaded.urls];
 
-      const selectedChoices =
+      const selectedOptionIds =
         form.category === "Pakavimo paslaugos"
-          ? form.packaging_choices
+          ? selectedOptions.map((option) => option.id)
           : [];
+      const selectedChoices = selectedOptions.map((option) => option.name);
 
       const payload = {
         name: form.name.trim(),
@@ -343,23 +393,22 @@ async function handleForgotPassword() {
         is_active: form.is_active,
         sort_order: Number(form.sort_order) || 0,
 
+        // Senas stulpelis paliekamas suderinamumui su ankstesniu svetainės kodu.
         packaging_choices: selectedChoices,
 
         packaging_mode:
           form.category === "Dovanų rinkiniai"
             ? "none"
-            : selectedChoices.length === 1 &&
-                selectedChoices[0] === "Popierinė dėžutė"
+            : selectedChoices.length === 1 && selectedChoices[0] === "Popierinė dėžutė"
               ? "fixed_paper_box"
-              : selectedChoices.length === 1 &&
-                  selectedChoices[0] === "Pintas krepšelis"
+              : selectedChoices.length === 1 && selectedChoices[0] === "Pintas krepšelis"
                 ? "fixed_basket"
                 : "custom",
 
         updated_at: new Date().toISOString(),
       };
 
-      let saveError;
+      let productId = editingId;
 
       if (editingId !== null) {
         const result = await supabase
@@ -367,20 +416,42 @@ async function handleForgotPassword() {
           .update(payload)
           .eq("id", editingId);
 
-        saveError = result.error;
+        if (result.error) throw result.error;
+        productSaved = true;
       } else {
         const result = await supabase
           .from("products")
-          .insert(payload);
+          .insert(payload)
+          .select("id")
+          .single();
 
-        saveError = result.error;
+        if (result.error) throw result.error;
+        productId = Number(result.data.id);
+        productSaved = true;
       }
 
-      if (saveError) {
-        if (uploadedPaths.length) {
-          await supabase.storage.from("product-images").remove(uploadedPaths);
-        }
-        throw saveError;
+      if (productId === null) {
+        throw new Error("Nepavyko nustatyti produkto ID.");
+      }
+
+      const { error: deleteLinksError } = await supabase
+        .from("product_packaging_options")
+        .delete()
+        .eq("product_id", productId);
+
+      if (deleteLinksError) throw deleteLinksError;
+
+      if (selectedOptionIds.length) {
+        const { error: insertLinksError } = await supabase
+          .from("product_packaging_options")
+          .insert(
+            selectedOptionIds.map((packagingOptionId) => ({
+              product_id: productId,
+              packaging_option_id: packagingOptionId,
+            }))
+          );
+
+        if (insertLinksError) throw insertLinksError;
       }
 
       if (editingId !== null) {
@@ -409,16 +480,93 @@ async function handleForgotPassword() {
       }
 
       resetForm();
-      await loadProducts();
+      await Promise.all([loadProducts(), loadPackagingOptions()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Nepavyko išsaugoti produkto.");
 
-      if (uploadedPaths.length) {
+      if (uploadedPaths.length && !productSaved) {
         await supabase.storage.from("product-images").remove(uploadedPaths);
       }
     } finally {
       setLoading(false);
     }
+  }
+
+  function startEditPackagingOption(option: PackagingOption) {
+    setEditingPackagingOptionId(option.id);
+    setPackagingOptionName(option.name);
+    setPackagingOptionPrice(option.price === null ? "" : String(option.price));
+    setError("");
+    setMessage("");
+  }
+
+  function resetPackagingOptionForm() {
+    setEditingPackagingOptionId(null);
+    setPackagingOptionName("");
+    setPackagingOptionPrice("");
+  }
+
+  async function handlePackagingOptionSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+
+    const name = packagingOptionName.trim();
+    const rawPrice = packagingOptionPrice.trim().replace(",", ".");
+    const price = Number(rawPrice);
+
+    if (!name) {
+      setError("Įrašyk pakavimo būdo pavadinimą.");
+      return;
+    }
+    if (rawPrice === "" || !Number.isFinite(price) || price < 0) {
+      setError("Įrašyk teisingą pakavimo būdo kainą.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const payload = {
+        name,
+        price,
+        updated_at: new Date().toISOString(),
+      };
+
+      const result = editingPackagingOptionId === null
+        ? await supabase.from("packaging_options").insert({ ...payload, is_active: true })
+        : await supabase.from("packaging_options").update(payload).eq("id", editingPackagingOptionId);
+
+      if (result.error) throw result.error;
+
+      resetPackagingOptionForm();
+      setMessage(editingPackagingOptionId === null
+        ? "Pakavimo būdas pridėtas."
+        : "Pakavimo būdas atnaujintas.");
+      await loadPackagingOptions();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Nepavyko išsaugoti pakavimo būdo.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function togglePackagingOption(option: PackagingOption) {
+    setError("");
+    setMessage("");
+    const { error } = await supabase
+      .from("packaging_options")
+      .update({ is_active: !option.is_active, updated_at: new Date().toISOString() })
+      .eq("id", option.id);
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    setMessage(option.is_active
+      ? "Pakavimo būdas išjungtas. Esami produktų priskyrimai išsaugoti."
+      : "Pakavimo būdas vėl aktyvus.");
+    await loadPackagingOptions();
   }
 
   async function toggleProduct(product: Product) {
@@ -556,6 +704,73 @@ async function handleForgotPassword() {
         {error && <p className="admin-error">{error}</p>}
 
         <section className="admin-panel">
+          <h2>Pakavimo būdų katalogas</h2>
+          <p>
+            Čia gali pridėti naujų pakavimo būdų ir nustatyti kiekvieno kainą.
+            Kaina naudojama kaip galutinė pasirinkto pakavimo paslaugos kaina,
+            o ne kaip papildomas mokestis prie produkto kainos.
+          </p>
+
+          <form onSubmit={handlePackagingOptionSave} className="admin-form admin-packaging-manager-form">
+            <label>
+              Pakavimo būdo pavadinimas
+              <input
+                value={packagingOptionName}
+                onChange={(e) => setPackagingOptionName(e.target.value)}
+                placeholder="Pvz., Medinė dėžutė"
+                required
+              />
+            </label>
+            <label>
+              Kaina (€)
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={packagingOptionPrice}
+                onChange={(e) => setPackagingOptionPrice(e.target.value)}
+                placeholder="Pvz., 8.50"
+                required
+              />
+            </label>
+            <div className="admin-form-actions">
+              <button disabled={loading}>
+                {loading ? "Saugoma..." : editingPackagingOptionId === null ? "Pridėti pakavimo būdą" : "Išsaugoti pakavimo būdą"}
+              </button>
+              {editingPackagingOptionId !== null && (
+                <button type="button" className="secondary" onClick={resetPackagingOptionForm}>
+                  Atšaukti
+                </button>
+              )}
+            </div>
+          </form>
+
+          <div className="admin-packaging-catalog">
+            {packagingOptions.length === 0 ? (
+              <p>Pakavimo būdų dar nėra. Sukurk pirmąjį būdą aukščiau.</p>
+            ) : packagingOptions.map((option) => (
+              <div className="admin-packaging-option" key={option.id}>
+                <div>
+                  <strong>{option.name}</strong>
+                  <span>{option.price === null ? "Kaina nenustatyta" : money(option.price)}</span>
+                  <span className={option.is_active ? "status active" : "status hidden"}>
+                    {option.is_active ? "Aktyvus" : "Išjungtas"}
+                  </span>
+                </div>
+                <div className="admin-product-actions">
+                  <button type="button" className="secondary" onClick={() => startEditPackagingOption(option)}>
+                    Keisti
+                  </button>
+                  <button type="button" className="secondary" onClick={() => togglePackagingOption(option)}>
+                    {option.is_active ? "Išjungti" : "Aktyvinti"}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="admin-panel">
           <h2>{editingId === null ? "Pridėti naują produktą" : "Redaguoti produktą"}</h2>
 
           <form onSubmit={handleSave} className="admin-form">
@@ -581,11 +796,11 @@ async function handleForgotPassword() {
                     category,
                     packaging_mode:
                       category === "Pakavimo paslaugos" ? "custom" : "none",
-                    packaging_choices:
+                    packaging_option_ids:
                       category === "Pakavimo paslaugos"
-                        ? current.packaging_choices.length
-                          ? current.packaging_choices
-                          : ["Popierinė dėžutė"]
+                        ? current.packaging_option_ids.length
+                          ? current.packaging_option_ids
+                          : packagingOptions.filter((option) => option.is_active).slice(0, 1).map((option) => option.id)
                         : [],
                   }));
                 }}
@@ -596,7 +811,9 @@ async function handleForgotPassword() {
               </label>
 
               <label>
-                Kaina (€)
+                {form.category === "Pakavimo paslaugos"
+                  ? "Atsarginė kaina (€), jei pakavimo būdo kaina nenustatyta"
+                  : "Kaina (€)"}
                 <input
                   type="number"
                   min="0"
@@ -617,25 +834,33 @@ async function handleForgotPassword() {
                 galės pasirinkti šiai paslaugai.
               </p>
 
-              {PACKAGING_CHOICES.map((choice) => (
-                <label className="admin-checkbox" key={choice}>
-                  <input
-                    type="checkbox"
-                    checked={form.packaging_choices.includes(choice)}
-                    onChange={(e) => {
-                      setForm((current) => ({
-                        ...current,
-                        packaging_choices: e.target.checked
-                          ? [...current.packaging_choices, choice]
-                          : current.packaging_choices.filter(
-                              (item) => item !== choice
-                            ),
-                      }));
-                    }}
-                  />
-                  {choice}
-                </label>
-              ))}
+              {packagingOptions.map((option) => {
+                const isSelected = form.packaging_option_ids.includes(option.id);
+                return (
+                  <label className="admin-checkbox" key={option.id}>
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      disabled={!option.is_active && !isSelected}
+                      onChange={(e) => {
+                        setForm((current) => ({
+                          ...current,
+                          packaging_option_ids: e.target.checked
+                            ? [...current.packaging_option_ids, option.id]
+                            : current.packaging_option_ids.filter((id) => id !== option.id),
+                        }));
+                      }}
+                    />
+                    <span>
+                      {option.name} — {option.price === null ? "kaina nenustatyta" : money(option.price)}
+                      {!option.is_active ? " (išjungtas – klientams nerodomas)" : ""}
+                    </span>
+                  </label>
+                );
+              })}
+              {packagingOptions.length === 0 && (
+                <p>Pirmiausia sukurk bent vieną pakavimo būdą žemiau esančiame kataloge.</p>
+              )}
             </div>
           )}
 
@@ -817,6 +1042,14 @@ async function handleForgotPassword() {
                     <span className="admin-help">{product.category}</span>
                     <h3>{product.name}</h3>
                     <strong>{money(product.price)}</strong>
+                    {product.packaging_option_ids.length > 0 && (
+                      <span className="admin-help">
+                        Pakavimas: {product.packaging_option_ids
+                          .map((id) => packagingOptions.find((option) => option.id === id)?.name)
+                          .filter(Boolean)
+                          .join(", ")}
+                      </span>
+                    )}
                     <span className={product.is_active ? "status active" : "status hidden"}>
                       {product.is_active ? "Rodomas svetainėje" : "Paslėptas"}
                     </span>
@@ -898,6 +1131,18 @@ function AdminStyles() {
         font-size: 13px;
         line-height: 1.5;
       }
+      .admin-packaging-manager-form {
+        grid-template-columns: 1.4fr 1fr auto;
+        align-items: end;
+        margin: 18px 0;
+      }
+      .admin-packaging-catalog { display: grid; gap: 9px; margin-top: 18px; }
+      .admin-packaging-option {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 14px; padding: 13px; border: 1px solid #eeeae3; border-radius: 10px;
+      }
+      .admin-packaging-option > div:first-child { display: grid; gap: 4px; }
+      .admin-packaging-option > div:first-child > span { font-size: 13px; color: #81796d; }
       .admin-header { margin-bottom: 25px; }
       .admin-header h1 { font-size: clamp(25px, 4vw, 36px); margin: 5px 0; }
       .admin-header p { color: #777; }
@@ -942,6 +1187,8 @@ function AdminStyles() {
       @media (max-width: 700px) {
         .admin-header { align-items: flex-start; flex-direction: column; }
         .admin-two-columns { grid-template-columns: 1fr; }
+        .admin-packaging-manager-form { grid-template-columns: 1fr; }
+        .admin-packaging-option { align-items: flex-start; flex-direction: column; }
         .admin-product { grid-template-columns: 75px 1fr; }
         .admin-product > img, .admin-no-image { width: 75px; height: 75px; }
         .admin-product-actions { grid-column: 1 / -1; }

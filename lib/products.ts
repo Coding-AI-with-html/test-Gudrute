@@ -1,3 +1,6 @@
+// Pakavimo būdai valdomi Supabase lentelėje public.packaging_options.
+// PACKAGING_CHOICES paliktas kaip pradinis / suderinamumo sąrašas;
+// naujus būdus svetainė pasiima iš duomenų bazės.
 
 export const PACKAGING_CHOICES = [
   "Popierinė dėžutė",
@@ -9,5 +12,14 @@ export const PACKAGING_CHOICES = [
   "Kitas variantas",
 ] as const;
 
-export type PackagingChoice =
-  (typeof PACKAGING_CHOICES)[number];
+// Nauji pavadinimai įvedami administravime, todėl tipas turi būti string,
+// o ne užfiksuotas vien tik aukščiau išvardintomis reikšmėmis.
+export type PackagingChoice = string;
+
+export type PackagingOption = {
+  id: number;
+  name: string;
+  price: number | null;
+  is_active?: boolean;
+  sort_order?: number;
+};

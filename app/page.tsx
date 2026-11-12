@@ -7,6 +7,7 @@ import {
   useMemo,
   type FormEvent,
 } from "react";
+import { createPortal } from "react-dom";
 
 import { createSupabaseClient } from "@/lib/supabase/client";
 import {
@@ -97,6 +98,10 @@ export default function Home() {
   const [activeImages, setActiveImages] = useState<
     Record<number, number>
   >({});
+
+  // Padidintos nuotraukų galerijos būsena.
+  const [galleryProductId, setGalleryProductId] = useState<number | null>(null);
+  const [galleryImageIndex, setGalleryImageIndex] = useState(0);
 
   const [cart, setCart] = useState<CartItem[]>([]);
   const [filter, setFilter] = useState<Category>("Pakavimo paslaugos");
@@ -216,6 +221,49 @@ export default function Home() {
     const unitPrice = (product?.price ?? 0) + (item.giftCard ? greetingCardPrice : 0);
     return sum + unitPrice * item.quantity;
   }, 0);
+
+  const galleryProduct =
+    galleryProductId === null
+      ? null
+      : products.find((product) => product.id === galleryProductId) ?? null;
+
+  const galleryImages = galleryProduct
+    ? galleryProduct.image_urls.length > 0
+      ? galleryProduct.image_urls
+      : [galleryProduct.image]
+    : [];
+  const safeGalleryImageIndex = galleryImages.length > 0
+    ? Math.min(galleryImageIndex, galleryImages.length - 1)
+    : 0;
+
+  useEffect(() => {
+    if (galleryProductId === null) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    function handleGalleryKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setGalleryProductId(null);
+      }
+
+      if (galleryImages.length > 1 && event.key === "ArrowRight") {
+        setGalleryImageIndex((current) => (current + 1) % galleryImages.length);
+      }
+
+      if (galleryImages.length > 1 && event.key === "ArrowLeft") {
+        setGalleryImageIndex(
+          (current) => (current - 1 + galleryImages.length) % galleryImages.length
+        );
+      }
+    }
+
+    window.addEventListener("keydown", handleGalleryKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleGalleryKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [galleryProductId, galleryImages.length]);
 
     function updatePackagingConfig(
     id: number,
@@ -562,14 +610,25 @@ export default function Home() {
                 }
               >
                 <div className="product-image">
-                  <img
-                    src={product.image_urls[imageIndex] || product.image}
-                    alt={product.name}
-                    loading="lazy"
-                    onError={(event) => {
-                      event.currentTarget.style.display = "none";
+                  <button
+                    type="button"
+                    className="product-image-button"
+                    onClick={() => {
+                      setGalleryProductId(product.id);
+                      setGalleryImageIndex(imageIndex);
                     }}
-                  />
+                    aria-label={`Padidinti „${product.name}“ nuotraukas`}
+                    title="Padidinti nuotrauką"
+                  >
+                    <img
+                      src={product.image_urls[imageIndex] || product.image}
+                      alt={product.name}
+                      loading="lazy"
+                      onError={(event) => {
+                        event.currentTarget.style.display = "none";
+                      }}
+                    />
+                  </button>
 
                   <span className="product-label">{product.label}</span>
                   <span className="product-category">{product.category}</span>
@@ -1199,6 +1258,101 @@ export default function Home() {
   </div>
 )}
 
+
+{/* Padidinta konkrečios prekės nuotraukų galerija */}
+{galleryProduct && galleryImages.length > 0
+  ? createPortal(
+      <div
+        className="product-gallery-overlay"
+        onClick={() => setGalleryProductId(null)}
+      >
+        <section
+          className="product-gallery-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${galleryProduct.name} nuotraukų galerija`}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="product-gallery-header">
+            <div>
+              <p className="eyebrow">NUOTRAUKŲ GALERIJA</p>
+              <h2>{galleryProduct.name}</h2>
+              <span>{safeGalleryImageIndex + 1} / {galleryImages.length}</span>
+            </div>
+
+            <button
+              type="button"
+              className="product-gallery-close"
+              onClick={() => setGalleryProductId(null)}
+              aria-label="Uždaryti nuotraukų galeriją"
+            >
+              ×
+            </button>
+          </div>
+
+          <div className="product-gallery-main">
+            {galleryImages.length > 1 && (
+              <button
+                type="button"
+                className="product-gallery-arrow"
+                onClick={() =>
+                  setGalleryImageIndex((current) =>
+                    (current - 1 + galleryImages.length) % galleryImages.length
+                  )
+                }
+                aria-label="Ankstesnė nuotrauka"
+              >
+                ‹
+              </button>
+            )}
+
+            <img
+              src={galleryImages[safeGalleryImageIndex]}
+              alt={`${galleryProduct.name} – nuotrauka ${safeGalleryImageIndex + 1}`}
+              decoding="async"
+            />
+
+            {galleryImages.length > 1 && (
+              <button
+                type="button"
+                className="product-gallery-arrow"
+                onClick={() =>
+                  setGalleryImageIndex((current) =>
+                    (current + 1) % galleryImages.length
+                  )
+                }
+                aria-label="Kita nuotrauka"
+              >
+                ›
+              </button>
+            )}
+          </div>
+
+          {galleryImages.length > 1 && (
+            <div className="product-gallery-thumbnails">
+              {galleryImages.map((url, index) => (
+                <button
+                  type="button"
+                  key={`${url}-${index}`}
+                  className={
+                    safeGalleryImageIndex === index
+                      ? "product-gallery-thumbnail active"
+                      : "product-gallery-thumbnail"
+                  }
+                  onClick={() => setGalleryImageIndex(index)}
+                  aria-label={`Rodyti nuotrauką ${index + 1}`}
+                  aria-pressed={safeGalleryImageIndex === index}
+                >
+                  <img src={url} alt="" loading="lazy" decoding="async" />
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>,
+      document.body
+    )
+  : null}
 
       <footer className="footer">
         <div className="footer-main">

@@ -1,4 +1,3 @@
-
 "use client";
 
 import {
@@ -12,6 +11,7 @@ import { createPortal } from "react-dom";
 import { createSupabaseClient } from "@/lib/supabase/client";
 import {
   type PackagingChoice,
+  type PackagingOption,
 } from "@/lib/products";
 
 type Product = {
@@ -20,6 +20,8 @@ type Product = {
   category: "Pakavimo paslaugos" | "Dovanų rinkiniai";
   price: number;
   description: string;
+  // Kas įeina į rinkinį (kiekviena eilutė – atskira pozicija).
+  contents: string;
   image: string;
   image_urls: string[];
   label: string;
@@ -28,11 +30,16 @@ type Product = {
     | "fixed_paper_box"
     | "fixed_basket"
     | "custom";
+  // Senas laukas paliktas suderinamumui su anksčiau sukurtais produktais.
   packaging_choices: PackagingChoice[];
+  // Aktyvūs pakavimo variantai su jų kainomis iš Supabase katalogo.
+  packaging_options: PackagingOption[];
 };
 
 type PackagingConfig = {
   packaging: PackagingChoice;
+  packagingOptionId: number | null;
+  packagingPrice: number | null;
   packagingNote: string;
   itemNote: string;
   giftCard: boolean;
@@ -44,6 +51,8 @@ type CartItem = {
   id: number;
   quantity: number;
   packaging?: PackagingChoice;
+  packagingOptionId?: number | null;
+  packagingPrice?: number | null;
   packagingNote?: string;
   itemNote?: string;
   giftCard?: boolean;
@@ -56,14 +65,29 @@ const greetingCardPrice = 2.0;
 
 
 function createPackagingConfig(product: Product): PackagingConfig {
+  const firstOption = product.packaging_options?.[0];
+
   return {
     packaging:
-      product.packaging_choices?.[0] ?? "Popierinė dėžutė",
+      firstOption?.name ?? product.packaging_choices?.[0] ?? "Popierinė dėžutė",
+    packagingOptionId: firstOption?.id ?? null,
+    packagingPrice: firstOption?.price ?? null,
     packagingNote: "",
     itemNote: "",
     giftCard: false,
     giftMessage: "",
   };
+}
+
+// Pakavimo būdo kaina yra galutinė paslaugos kaina.
+// Jei varianto kaina nenustatyta, naudojama produkto atsarginė kaina.
+function getCartItemUnitPrice(product: Product, item: CartItem): number {
+  const basePrice =
+    product.category === "Pakavimo paslaugos"
+      ? item.packagingPrice ?? product.price
+      : product.price;
+
+  return basePrice + (item.giftCard ? greetingCardPrice : 0);
 }
 
 
@@ -120,16 +144,33 @@ export default function Home() {
       setProductsError("");
 
       try {
-        const { data, error } = await supabase
-          .from("products")
-          .select(
-            "id, name, category, price, description, image_urls, label, packaging_mode, packaging_choices"
-          )
-          .eq("is_active", true)
-          .order("sort_order", { ascending: true })
-          .order("id", { ascending: true });
+        const [
+          { data, error },
+          { data: links, error: linksError },
+          { data: optionRows, error: optionsError },
+        ] = await Promise.all([
+          supabase
+            .from("products")
+            .select(
+              "id, name, category, price, description, contents, image_urls, label, packaging_mode, packaging_choices"
+            )
+            .eq("is_active", true)
+            .order("sort_order", { ascending: true })
+            .order("id", { ascending: true }),
+          supabase
+            .from("product_packaging_options")
+            .select("product_id, packaging_option_id"),
+          supabase
+            .from("packaging_options")
+            .select("id, name, price, is_active, sort_order")
+            .eq("is_active", true)
+            .order("sort_order", { ascending: true })
+            .order("name", { ascending: true }),
+        ]);
 
         if (error) throw error;
+        if (linksError) throw new Error(`Nepavyko įkelti produktų pakavimo būdų: ${linksError.message}`);
+        if (optionsError) throw new Error(`Nepavyko įkelti pakavimo būdų katalogo: ${optionsError.message}`);
 
         if (!active) return;
 
@@ -139,13 +180,52 @@ export default function Home() {
           category: Product["category"];
           price: number | string;
           description: string;
+          contents: string | null;
           image_urls: string[] | null;
           label: string | null;
           packaging_mode: Product["packaging_mode"] | null;
           packaging_choices: PackagingChoice[] | null;
         };
+        type ProductPackagingLink = {
+          product_id: number;
+          packaging_option_id: number;
+        };
+        type PackagingOptionRow = {
+          id: number;
+          name: string;
+          price: number | string | null;
+          is_active: boolean;
+          sort_order: number | null;
+        };
 
         const rows = (data ?? []) as ProductRow[];
+        const activeOptions = (optionRows ?? []) as PackagingOptionRow[];
+        const optionsById = new Map<number, PackagingOption>();
+        activeOptions.forEach((option) => {
+          optionsById.set(Number(option.id), {
+            id: Number(option.id),
+            name: option.name,
+            price: option.price === null ? null : Number(option.price),
+            is_active: option.is_active,
+            sort_order: Number(option.sort_order ?? 0),
+          });
+        });
+        const optionsByProduct = new Map<number, PackagingOption[]>();
+
+        ((links ?? []) as ProductPackagingLink[]).forEach((link) => {
+          const option = optionsById.get(Number(link.packaging_option_id));
+          if (!option) return;
+
+          const productId = Number(link.product_id);
+          const current = optionsByProduct.get(productId) ?? [];
+          current.push(option);
+          optionsByProduct.set(productId, current);
+        });
+        optionsByProduct.forEach((options) => {
+          options.sort(
+            (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name, "lt")
+          );
+        });
 
         const mappedProducts: Product[] = rows.map((row) => {
           const imageUrls = row.image_urls ?? [];
@@ -156,11 +236,13 @@ export default function Home() {
             category: row.category,
             price: Number(row.price),
             description: row.description,
+            contents: row.contents ?? "",
             image_urls: imageUrls,
             image: imageUrls[0] || "/logo.png",
             label: row.label ?? "",
             packaging_mode: row.packaging_mode ?? "none",
             packaging_choices: row.packaging_choices ?? [],
+            packaging_options: optionsByProduct.get(Number(row.id)) ?? [],
           };
         });
 
@@ -170,11 +252,34 @@ export default function Home() {
           const next = { ...current };
 
           mappedProducts.forEach((product) => {
-            if (
-              product.category === "Pakavimo paslaugos" &&
-              !next[product.id]
-            ) {
+            if (product.category !== "Pakavimo paslaugos") return;
+
+            const currentConfig = next[product.id];
+            const selectedOption = product.packaging_options.find(
+              (option) => option.id === currentConfig?.packagingOptionId
+            ) ?? product.packaging_options.find(
+              (option) => option.name === currentConfig?.packaging
+            );
+
+            if (!currentConfig) {
               next[product.id] = createPackagingConfig(product);
+            } else if (selectedOption) {
+              // Atnaujiname ir kainą, jei administratorius ją pakeitė.
+              next[product.id] = {
+                ...currentConfig,
+                packaging: selectedOption.name,
+                packagingOptionId: selectedOption.id,
+                packagingPrice: selectedOption.price,
+              };
+            } else if (product.packaging_options.length > 0) {
+              // Jei anksčiau pasirinktas būdas pašalintas iš prekės, parenkame pirmą aktyvų.
+              next[product.id] = {
+                ...currentConfig,
+                packaging: product.packaging_options[0].name,
+                packagingOptionId: product.packaging_options[0].id,
+                packagingPrice: product.packaging_options[0].price,
+                packagingNote: "",
+              };
             }
           });
 
@@ -218,7 +323,7 @@ export default function Home() {
 
   const cartTotal = cart.reduce((sum, item) => {
     const product = products.find((entry) => entry.id === item.id);
-    const unitPrice = (product?.price ?? 0) + (item.giftCard ? greetingCardPrice : 0);
+    const unitPrice = product ? getCartItemUnitPrice(product, item) : 0;
     return sum + unitPrice * item.quantity;
   }, 0);
 
@@ -358,9 +463,11 @@ export default function Home() {
       const product = products.find((entry) => entry.id === item.id);
       if (!product) return "";
 
-      const unitPrice = product.price + (item.giftCard ? greetingCardPrice : 0);
+      const unitPrice = getCartItemUnitPrice(product, item);
       const details = [
-        item.packaging ? `Įpakavimas: ${item.packaging}` : "",
+        item.packaging
+          ? `Įpakavimas: ${item.packaging} (${money(item.packagingPrice ?? product.price)})`
+          : "",
         item.packagingNote ? `Papildoma įpakavimo idėja: ${item.packagingNote}` : "",
         item.itemNote ? `Daiktas, kurį reikia supakuoti: ${item.itemNote}` : "",
         item.giftCard ? `Mokama palinkėjimo kortelė: ${item.giftMessage || "Tekstas nenurodytas"}` : "",
@@ -588,9 +695,25 @@ export default function Home() {
           {visibleProducts.map((product) => {
             const config =
               packagingConfigs[product.id] ?? createPackagingConfig(product);
-            const packagingChoices = product.packaging_choices?.length
-              ? product.packaging_choices
-              : ["Popierinė dėžutė" as PackagingChoice];
+            // Pirmiausia naudojame naują kainų katalogą. Senas text[] laukas
+            // paliktas tik atsarginiam suderinamumui su senomis prekėmis.
+            const packagingOptions: PackagingOption[] = product.packaging_options.length
+              ? product.packaging_options
+              : (product.packaging_choices.length ? product.packaging_choices : ["Popierinė dėžutė"])
+                  .map((name, index) => ({
+                    id: -(index + 1),
+                    name,
+                    price: null,
+                    is_active: true,
+                    sort_order: index,
+                  }));
+            const selectedPackagingOption = packagingOptions.find(
+              (option) => option.id === config.packagingOptionId
+            ) ?? packagingOptions.find((option) => option.name === config.packaging);
+            const selectedPackagingPrice = selectedPackagingOption?.price ?? product.price;
+            const displayedProductPrice =
+              (product.category === "Pakavimo paslaugos" ? selectedPackagingPrice : product.price) +
+              (config.giftCard ? greetingCardPrice : 0);
 
             const imageIndex = Math.min(
               activeImages[product.id] ?? 0,
@@ -685,14 +808,48 @@ export default function Home() {
                   <div>
                     <h3>{product.name}</h3>
                     <p>{product.description}</p>
+
+                    {product.contents.trim() && (
+                      <div
+                        className="product-contents"
+                        style={{
+                          marginTop: 14,
+                          paddingTop: 12,
+                          borderTop: "1px solid #e5e0d7",
+                          fontSize: 14,
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        <strong
+                          style={{
+                            display: "block",
+                            marginBottom: 6,
+                            fontSize: 12,
+                            letterSpacing: 1.5,
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          Kas įeina į rinkinį
+                        </strong>
+                        <ul style={{ margin: 0, paddingLeft: 18 }}>
+                          {product.contents
+                            .split("\n")
+                            .map((line) => line.trim())
+                            .filter(Boolean)
+                            .map((line, index) => (
+                              <li key={`${product.id}-content-${index}`}>{line}</li>
+                            ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
 
                   {product.category === "Pakavimo paslaugos" && (
                   <div className="product-options">
-                    {packagingChoices.length === 1 &&
-                    packagingChoices[0] !== "Kitas variantas" ? (
+                    {packagingOptions.length === 1 &&
+                    packagingOptions[0].name !== "Kitas variantas" ? (
                       <p className="package-fixed">
-                        Pasirinktas tipas: <strong>{packagingChoices[0]}</strong>
+                        Pasirinktas tipas: <strong>{packagingOptions[0].name}</strong>
                       </p>
                     ) : (
                       <>
@@ -702,25 +859,35 @@ export default function Home() {
 
                         <select
                           id={`packaging-${product.id}`}
-                          value={config.packaging}
-                          onChange={(event) =>
+                          value={selectedPackagingOption?.name ?? config.packaging}
+                          onChange={(event) => {
+                            const selectedOption = packagingOptions.find(
+                              (option) => option.name === event.target.value
+                            );
                             updatePackagingConfig(product.id, {
-                              packaging: event.target.value as PackagingChoice,
+                              packaging: event.target.value,
+                              packagingOptionId:
+                                selectedOption && selectedOption.id > 0 ? selectedOption.id : null,
+                              packagingPrice: selectedOption?.price ?? null,
                               packagingNote:
                                 event.target.value === "Kitas variantas"
                                   ? config.packagingNote
                                   : "",
-                            })
-                          }
+                            });
+                          }}
                         >
-                          {packagingChoices.map((choice) => (
-                            <option key={choice} value={choice}>
-                              {choice}
+                          {packagingOptions.map((option) => (
+                            <option key={option.id} value={option.name}>
+                              {option.name} — {money(option.price ?? product.price)}
                             </option>
                           ))}
                         </select>
                       </>
                     )}
+
+                    <p className="package-fixed">
+                      Pakavimo kaina: <strong>{money(selectedPackagingPrice)}</strong>
+                    </p>
 
                     {config.packaging === "Kitas variantas" && (
                       <>
@@ -802,7 +969,7 @@ export default function Home() {
                 )}
 
                   <div className="product-buy">
-                    <strong>{money(product.price)}</strong>
+                    <strong>{money(displayedProductPrice)}</strong>
 
                     <button
                       className="add-button"
@@ -919,8 +1086,8 @@ export default function Home() {
                   <div className="cart-item" key={item.lineId}>
                     <div className="cart-item-info">
                       <strong>{product.name}</strong>
-                      <p>{money(product.price + (item.giftCard ? greetingCardPrice : 0))} / vnt.</p>
-                      {item.packaging && <p className="cart-config">Įpakavimo būdas: {item.packaging}</p>}
+                      <p>{money(getCartItemUnitPrice(product, item))} / vnt.</p>
+                      {item.packaging && <p className="cart-config">Įpakavimo būdas: {item.packaging} ({money(item.packagingPrice ?? product.price)})</p>}
                       {item.itemNote && <p className="cart-config">Daiktas, kurį supakuoti: {item.itemNote}</p>}
                       {item.packagingNote && <p className="cart-config">Įpakavimo idėja: {item.packagingNote}</p>}
                       {item.giftCard && <p className="cart-config">Palinkėjimo kortelė: „{item.giftMessage}“</p>}
@@ -943,7 +1110,7 @@ export default function Home() {
                     </div>
 
                     <strong className="cart-line-total">
-                      {money((product.price + (item.giftCard ? greetingCardPrice : 0)) * item.quantity)}
+                      {money(getCartItemUnitPrice(product, item) * item.quantity)}
                     </strong>
 
                     <button
@@ -1179,8 +1346,8 @@ export default function Home() {
 
                     <h3>{product.name}</h3>
 
-                    <strong>{money(product.price + (item.giftCard ? greetingCardPrice : 0))}</strong>
-                    {item.packaging && <p className="drawer-config">Įpakavimo būdas: {item.packaging}</p>}
+                    <strong>{money(getCartItemUnitPrice(product, item))}</strong>
+                    {item.packaging && <p className="drawer-config">Įpakavimo būdas: {item.packaging} ({money(item.packagingPrice ?? product.price)})</p>}
                     {item.itemNote && <p className="drawer-config">Daiktas, kurį supakuoti: {item.itemNote}</p>}
                     {item.packagingNote && <p className="drawer-config">Įpakavimo idėja: {item.packagingNote}</p>}
                     {item.giftCard && <p className="drawer-config">Kortelė: „{item.giftMessage}“</p>}
@@ -1205,7 +1372,7 @@ export default function Home() {
                   </div>
 
                   <div className="drawer-item-end">
-                    <strong>{money((product.price + (item.giftCard ? greetingCardPrice : 0)) * item.quantity)}</strong>
+                    <strong>{money(getCartItemUnitPrice(product, item) * item.quantity)}</strong>
                     <button
                       className="drawer-remove"
                       onClick={() => removeFromCart(item.lineId)}

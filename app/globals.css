@@ -714,3 +714,35 @@ h1 em, h2 em { color: var(--rose); font-weight: 400; }
   transform: none !important;
 }
 
+
+/* Pranešimas ekrano apačioje */
+.notice {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 99998;
+
+  width: max-content;
+  max-width: min(92vw, 520px);
+  margin: 0;
+  padding: 14px 20px;
+
+  border-left: 4px solid var(--rose);
+  border-radius: 8px;
+  background: #fff4ef;
+  color: var(--brown);
+
+  font-size: 13px;
+  line-height: 1.5;
+  box-shadow: 0 8px 30px rgb(73 51 41 / 18%);
+  text-align: center;
+}
+
+@media (max-width: 600px) {
+  .notice {
+    bottom: 16px;
+    width: calc(100% - 32px);
+  }
+}
+

@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
@@ -18,6 +17,7 @@ type Product = {
   category: "Pakavimo paslaugos" | "Dovanų rinkiniai";
   price: number;
   description: string;
+  contents: string | null;
   image_urls: string[];
   label: string;
   is_active: boolean;
@@ -32,6 +32,7 @@ type EditorForm = {
   category: Product["category"];
   price: string;
   description: string;
+  contents: string;
   label: string;
   image_urls: string[];
   is_active: boolean;
@@ -45,6 +46,7 @@ const emptyForm: EditorForm = {
   category: "Dovanų rinkiniai",
   price: "",
   description: "",
+  contents: "",
   label: "",
   image_urls: [],
   is_active: true,
@@ -266,6 +268,7 @@ async function handleForgotPassword() {
       category: product.category,
       price: String(product.price),
       description: product.description,
+      contents: product.contents ?? "",
       label: product.label ?? "",
       image_urls: product.image_urls ?? [],
       is_active: product.is_active,
@@ -388,6 +391,9 @@ async function handleForgotPassword() {
         category: form.category,
         price,
         description: form.description.trim(),
+        // Sudėtis naudojama tik dovanų rinkiniams.
+        contents:
+          form.category === "Dovanų rinkiniai" ? form.contents.trim() : "",
         label: form.label.trim(),
         image_urls: imageUrls,
         is_active: form.is_active,
@@ -882,6 +888,21 @@ async function handleForgotPassword() {
                 required
               />
             </label>
+
+            {form.category === "Dovanų rinkiniai" && (
+              <label>
+                Rinkinio sudėtis (nebūtina)
+                <textarea
+                  rows={5}
+                  value={form.contents}
+                  onChange={(e) => setForm({ ...form, contents: e.target.value })}
+                  placeholder={"Kiekviena eilutė – atskira pozicija, pvz.:\n6 vnt. sviestinių sausainių su šokoladu\n4 vnt. imbierinių sausainių\n1 vnt. arbatos pakelis"}
+                />
+                <span className="admin-help">
+                  Rodoma svetainėje po produkto aprašymu kaip sąrašas.
+                </span>
+              </label>
+            )}
 
             <label>
               Nuotraukos (JPG, PNG arba WEBP, iki 5 MB kiekviena)

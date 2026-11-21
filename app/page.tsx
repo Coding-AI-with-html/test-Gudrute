@@ -133,7 +133,19 @@ export default function Home() {
   const [contactSent, setContactSent] = useState(false);
   const [contactSending, setContactSending] = useState(false);
   const [contactError, setContactError] = useState("");
-  
+  const [checkoutSending, setCheckoutSending] = useState(false);
+  const [checkoutError, setCheckoutError] = useState("");
+
+  // Jei klientas grįžta atgal iš Paysera puslapio, mygtukas vėl tampa aktyvus.
+  useEffect(() => {
+    function handlePageShow(event: PageTransitionEvent) {
+      if (event.persisted) setCheckoutSending(false);
+    }
+
+    window.addEventListener("pageshow", handlePageShow);
+    return () => window.removeEventListener("pageshow", handlePageShow);
+  }, []);
+
   useEffect(() => {
     let active = true;
 
@@ -444,6 +456,59 @@ export default function Home() {
 
   function removeFromCart(lineId: string) {
     setCart((current) => current.filter((item) => item.lineId !== lineId));
+  }
+
+  // Siunčia krepšelį į serverį. Serveris pats perskaičiuoja kainas iš Supabase,
+  // sukuria užsakymą ir grąžina Paysera mokėjimo nuorodą.
+  async function handleCheckout(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (cart.length === 0 || checkoutSending) return;
+
+    const data = new FormData(event.currentTarget);
+
+    setCheckoutSending(true);
+    setCheckoutError("");
+
+    try {
+      const response = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customer: {
+            name: String(data.get("name") ?? "").trim(),
+            email: String(data.get("email") ?? "").trim(),
+            phone: String(data.get("phone") ?? "").trim(),
+          },
+          items: cart.map((item) => ({
+            productId: item.id,
+            quantity: item.quantity,
+            packagingOptionId: item.packagingOptionId ?? null,
+            packaging: item.packaging ?? null,
+            itemNote: item.itemNote ?? "",
+            packagingNote: item.packagingNote ?? "",
+            giftCard: Boolean(item.giftCard),
+            giftMessage: item.giftMessage ?? "",
+          })),
+        }),
+      });
+
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok || !result.url) {
+        throw new Error(result.error || "Nepavyko pradėti apmokėjimo. Bandyk dar kartą.");
+      }
+
+      // Nukreipiame į Paysera apmokėjimo puslapį.
+      window.location.href = result.url;
+    } catch (error) {
+      setCheckoutError(
+        error instanceof Error
+          ? error.message
+          : "Nepavyko pradėti apmokėjimo. Patikrink interneto ryšį ir bandyk dar kartą."
+      );
+      setCheckoutSending(false);
+    }
   }
 
   async function handleContactSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1132,7 +1197,6 @@ export default function Home() {
 
             <p className="cart-notice">
               Pristatymo kaina, jei taikoma, apskaičiuojama atskirai.
-              Šiuo metu tai demonstracinis krepšelis.
             </p>
 
             <a
@@ -1395,8 +1459,53 @@ export default function Home() {
 
             <p>Pristatymo kaina, jei taikoma, apskaičiuojama atskirai.</p>
 
+            <form
+              className="drawer-checkout-form"
+              onSubmit={handleCheckout}
+              style={{ display: "grid", gap: 8, margin: "12px 0" }}
+            >
+              {[
+                { name: "name", type: "text", placeholder: "Vardas", autoComplete: "name", required: true },
+                { name: "email", type: "email", placeholder: "El. paštas", autoComplete: "email", required: true },
+                { name: "phone", type: "tel", placeholder: "Telefonas (nebūtina)", autoComplete: "tel", required: false },
+              ].map((field) => (
+                <input
+                  key={field.name}
+                  name={field.name}
+                  type={field.type}
+                  placeholder={field.placeholder}
+                  autoComplete={field.autoComplete}
+                  required={field.required}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: 12,
+                    border: "1px solid #d8d3ca",
+                    borderRadius: 9,
+                    background: "white",
+                    color: "#292722",
+                    font: "inherit",
+                  }}
+                />
+              ))}
+
+              <button
+                type="submit"
+                className="button button-dark drawer-checkout"
+                disabled={checkoutSending}
+              >
+                {checkoutSending ? "Nukreipiama..." : "Apmokėti per Paysera"} <span>↗</span>
+              </button>
+
+              {checkoutError && (
+                <p className="form-hint" role="alert">
+                  {checkoutError}
+                </p>
+              )}
+            </form>
+
             <button
-              className="button button-dark drawer-checkout"
+              className="drawer-continue"
               onClick={() => {
                 setCartOpen(false);
                 setNotice("Susisiek su mumis dėl pasirinkto užsakymo.");
@@ -1405,7 +1514,7 @@ export default function Home() {
                 });
               }}
             >
-              Užklausti dėl užsakymo <span>↗</span>
+              Turiu klausimų – parašyti žinutę
             </button>
 
             <button

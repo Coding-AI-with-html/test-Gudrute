@@ -8,9 +8,10 @@ export const metadata: Metadata = {
 
   other: {
     "paysera-verify":
-      "paysera-verify-ea8a81043bf13ecb5e4d4b092681443c",
+      "paysera-verify-4427a57af522475f11e600b5fcd3c737",
   },
 };
+
 
 export default function RootLayout({
   children,

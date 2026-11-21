@@ -713,8 +713,8 @@ async function handleForgotPassword() {
           <h2>Pakavimo būdų katalogas</h2>
           <p>
             Čia gali pridėti naujų pakavimo būdų ir nustatyti kiekvieno kainą.
-            Kaina naudojama kaip galutinė pasirinkto pakavimo paslaugos kaina,
-            o ne kaip papildomas mokestis prie produkto kainos.
+            Ši kaina pridedama prie produkto kainos: galutinė kaina =
+            produkto kaina + pasirinkto pakavimo būdo kaina.
           </p>
 
           <form onSubmit={handlePackagingOptionSave} className="admin-form admin-packaging-manager-form">
@@ -818,7 +818,7 @@ async function handleForgotPassword() {
 
               <label>
                 {form.category === "Pakavimo paslaugos"
-                  ? "Atsarginė kaina (€), jei pakavimo būdo kaina nenustatyta"
+                  ? "Produkto kaina (€) – prie jos pridedama pasirinkto pakavimo būdo kaina"
                   : "Kaina (€)"}
                 <input
                   type="number"
@@ -858,7 +858,7 @@ async function handleForgotPassword() {
                       }}
                     />
                     <span>
-                      {option.name} — {option.price === null ? "kaina nenustatyta" : money(option.price)}
+                      {option.name} — {option.price === null ? "kaina nenustatyta" : `+ ${money(option.price)}`}
                       {!option.is_active ? " (išjungtas – klientams nerodomas)" : ""}
                     </span>
                   </label>
@@ -1062,7 +1062,10 @@ async function handleForgotPassword() {
                   <div className="admin-product-details">
                     <span className="admin-help">{product.category}</span>
                     <h3>{product.name}</h3>
-                    <strong>{money(product.price)}</strong>
+                    <strong>
+                      {money(product.price)}
+                      {product.category === "Pakavimo paslaugos" ? " + pakavimas" : ""}
+                    </strong>
                     {product.packaging_option_ids.length > 0 && (
                       <span className="admin-help">
                         Pakavimas: {product.packaging_option_ids

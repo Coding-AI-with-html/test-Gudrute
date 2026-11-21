@@ -79,15 +79,13 @@ function createPackagingConfig(product: Product): PackagingConfig {
   };
 }
 
-// Pakavimo būdo kaina yra galutinė paslaugos kaina.
-// Jei varianto kaina nenustatyta, naudojama produkto atsarginė kaina.
+// Galutinė kaina = produkto kaina + pasirinkto pakavimo būdo kaina (+ palinkėjimo kortelė).
+// Jei pakavimo būdo kaina nenustatyta, prie produkto kainos nieko nepridedama.
 function getCartItemUnitPrice(product: Product, item: CartItem): number {
-  const basePrice =
-    product.category === "Pakavimo paslaugos"
-      ? item.packagingPrice ?? product.price
-      : product.price;
+  const packagingPrice =
+    product.category === "Pakavimo paslaugos" ? item.packagingPrice ?? 0 : 0;
 
-  return basePrice + (item.giftCard ? greetingCardPrice : 0);
+  return product.price + packagingPrice + (item.giftCard ? greetingCardPrice : 0);
 }
 
 
@@ -466,7 +464,7 @@ export default function Home() {
       const unitPrice = getCartItemUnitPrice(product, item);
       const details = [
         item.packaging
-          ? `Įpakavimas: ${item.packaging} (${money(item.packagingPrice ?? product.price)})`
+          ? `Įpakavimas: ${item.packaging} (+ ${money(item.packagingPrice ?? 0)})`
           : "",
         item.packagingNote ? `Papildoma įpakavimo idėja: ${item.packagingNote}` : "",
         item.itemNote ? `Daiktas, kurį reikia supakuoti: ${item.itemNote}` : "",
@@ -710,9 +708,11 @@ export default function Home() {
             const selectedPackagingOption = packagingOptions.find(
               (option) => option.id === config.packagingOptionId
             ) ?? packagingOptions.find((option) => option.name === config.packaging);
-            const selectedPackagingPrice = selectedPackagingOption?.price ?? product.price;
+            // Galutinė kaina = produkto kaina + pasirinkto pakavimo būdo kaina.
+            const selectedPackagingPrice = selectedPackagingOption?.price ?? 0;
             const displayedProductPrice =
-              (product.category === "Pakavimo paslaugos" ? selectedPackagingPrice : product.price) +
+              product.price +
+              (product.category === "Pakavimo paslaugos" ? selectedPackagingPrice : 0) +
               (config.giftCard ? greetingCardPrice : 0);
 
             const imageIndex = Math.min(
@@ -878,7 +878,8 @@ export default function Home() {
                         >
                           {packagingOptions.map((option) => (
                             <option key={option.id} value={option.name}>
-                              {option.name} — {money(option.price ?? product.price)}
+                              {option.name}
+                              {option.price !== null ? ` — + ${money(option.price)}` : ""}
                             </option>
                           ))}
                         </select>
@@ -886,7 +887,7 @@ export default function Home() {
                     )}
 
                     <p className="package-fixed">
-                      Pakavimo kaina: <strong>{money(selectedPackagingPrice)}</strong>
+                      Pakavimo kaina: <strong>+ {money(selectedPackagingPrice)}</strong>
                     </p>
 
                     {config.packaging === "Kitas variantas" && (
@@ -1087,7 +1088,7 @@ export default function Home() {
                     <div className="cart-item-info">
                       <strong>{product.name}</strong>
                       <p>{money(getCartItemUnitPrice(product, item))} / vnt.</p>
-                      {item.packaging && <p className="cart-config">Įpakavimo būdas: {item.packaging} ({money(item.packagingPrice ?? product.price)})</p>}
+                      {item.packaging && <p className="cart-config">Įpakavimo būdas: {item.packaging} (+ {money(item.packagingPrice ?? 0)})</p>}
                       {item.itemNote && <p className="cart-config">Daiktas, kurį supakuoti: {item.itemNote}</p>}
                       {item.packagingNote && <p className="cart-config">Įpakavimo idėja: {item.packagingNote}</p>}
                       {item.giftCard && <p className="cart-config">Palinkėjimo kortelė: „{item.giftMessage}“</p>}
@@ -1347,7 +1348,7 @@ export default function Home() {
                     <h3>{product.name}</h3>
 
                     <strong>{money(getCartItemUnitPrice(product, item))}</strong>
-                    {item.packaging && <p className="drawer-config">Įpakavimo būdas: {item.packaging} ({money(item.packagingPrice ?? product.price)})</p>}
+                    {item.packaging && <p className="drawer-config">Įpakavimo būdas: {item.packaging} (+ {money(item.packagingPrice ?? 0)})</p>}
                     {item.itemNote && <p className="drawer-config">Daiktas, kurį supakuoti: {item.itemNote}</p>}
                     {item.packagingNote && <p className="drawer-config">Įpakavimo idėja: {item.packagingNote}</p>}
                     {item.giftCard && <p className="drawer-config">Kortelė: „{item.giftMessage}“</p>}

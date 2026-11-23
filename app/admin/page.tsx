@@ -19,6 +19,15 @@ type BuildItem = {
   sort_order: number;
 };
 
+type SitePage = {
+  id: number;
+  slug: string | null;
+  title: string;
+  body: string;
+  sort_order: number;
+  is_active: boolean;
+};
+
 type Product = {
   id: number;
   name: string;
@@ -100,6 +109,9 @@ export default function AdminPage() {
   const [buildItemName, setBuildItemName] = useState("");
   const [buildItemPrice, setBuildItemPrice] = useState("");
   const [editingBuildItemId, setEditingBuildItemId] = useState<number | null>(null);
+  const [sitePages, setSitePages] = useState<SitePage[]>([]);
+  const [pageForm, setPageForm] = useState({ title: "", body: "", sort_order: "0", is_active: true });
+  const [editingPageId, setEditingPageId] = useState<number | null>(null);
   const [form, setForm] = useState<EditorForm>(emptyForm);
   const [files, setFiles] = useState<File[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -142,6 +154,30 @@ export default function AdminPage() {
         price: Number(row.price ?? 0),
         is_active: Boolean(row.is_active),
         sort_order: Number(row.sort_order ?? 0),
+      }))
+    );
+  }, [supabase]);
+
+  const loadSitePages = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("site_pages")
+      .select("id, slug, title, body, sort_order, is_active")
+      .order("sort_order", { ascending: true })
+      .order("id", { ascending: true });
+
+    if (error) {
+      setError("Nepavyko įkelti taisyklių (ar paleistas site-pages.sql?): " + error.message);
+      return;
+    }
+
+    setSitePages(
+      (data ?? []).map((row: any) => ({
+        id: Number(row.id),
+        slug: row.slug ?? null,
+        title: row.title,
+        body: row.body ?? "",
+        sort_order: Number(row.sort_order ?? 0),
+        is_active: Boolean(row.is_active),
       }))
     );
   }, [supabase]);
@@ -202,7 +238,7 @@ export default function AdminPage() {
         setError(error.message);
       } else if (data.session?.user.id === adminUid) {
         setIsAdmin(true);
-        await Promise.all([loadProducts(), loadPackagingOptions(), loadBuildItems()]);
+        await Promise.all([loadProducts(), loadPackagingOptions(), loadBuildItems(), loadSitePages()]);
       } else if (data.session) {
         await supabase.auth.signOut();
       }
@@ -215,7 +251,7 @@ export default function AdminPage() {
     return () => {
       alive = false;
     };
-  }, [supabase, adminUid, loadProducts, loadPackagingOptions, loadBuildItems]);
+  }, [supabase, adminUid, loadProducts, loadPackagingOptions, loadBuildItems, loadSitePages]);
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -242,7 +278,7 @@ export default function AdminPage() {
       setIsAdmin(true);
       setPassword("");
       setMessage("Sėkmingai prisijungei!");
-      await Promise.all([loadProducts(), loadPackagingOptions(), loadBuildItems()]);
+      await Promise.all([loadProducts(), loadPackagingOptions(), loadBuildItems(), loadSitePages()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Prisijungti nepavyko.");
     } finally {
@@ -256,6 +292,7 @@ export default function AdminPage() {
     setProducts([]);
     setPackagingOptions([]);
     setBuildItems([]);
+    setSitePages([]);
     setMessage("");
     setError("");
   }
@@ -676,6 +713,103 @@ async function handleForgotPassword() {
 
     setMessage(item.is_active ? "Rinkinio produktas išjungtas." : "Rinkinio produktas vėl aktyvus.");
     await loadBuildItems();
+  }
+
+  function startEditPage(page: SitePage) {
+    setEditingPageId(page.id);
+    setPageForm({
+      title: page.title,
+      body: page.body,
+      sort_order: String(page.sort_order),
+      is_active: page.is_active,
+    });
+    setError("");
+    setMessage("");
+    window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+  }
+
+  function resetPageForm() {
+    setEditingPageId(null);
+    setPageForm({ title: "", body: "", sort_order: "0", is_active: true });
+  }
+
+  async function handlePageSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+
+    const title = pageForm.title.trim();
+    const body = pageForm.body.trim();
+
+    if (!title) {
+      setError("Įrašyk skyriaus pavadinimą.");
+      return;
+    }
+    if (!body) {
+      setError("Įrašyk skyriaus tekstą.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const payload = {
+        title,
+        body,
+        sort_order: Number(pageForm.sort_order) || 0,
+        is_active: pageForm.is_active,
+        updated_at: new Date().toISOString(),
+      };
+
+      const result = editingPageId === null
+        ? await supabase.from("site_pages").insert(payload)
+        : await supabase.from("site_pages").update(payload).eq("id", editingPageId);
+
+      if (result.error) throw result.error;
+
+      const wasNew = editingPageId === null;
+      resetPageForm();
+      setMessage(wasNew ? "Skyrius pridėtas." : "Skyrius atnaujintas.");
+      await loadSitePages();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Nepavyko išsaugoti skyriaus.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function toggleSitePage(page: SitePage) {
+    setError("");
+    setMessage("");
+    const { error } = await supabase
+      .from("site_pages")
+      .update({ is_active: !page.is_active, updated_at: new Date().toISOString() })
+      .eq("id", page.id);
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    setMessage(page.is_active ? "Skyrius paslėptas." : "Skyrius dabar rodomas svetainėje.");
+    await loadSitePages();
+  }
+
+  async function deleteSitePage(page: SitePage) {
+    if (!window.confirm(`Ar tikrai ištrinti skyrių „${page.title}“?`)) return;
+
+    setError("");
+    setMessage("");
+
+    const { error } = await supabase.from("site_pages").delete().eq("id", page.id);
+
+    if (error) {
+      setError("Nepavyko ištrinti: " + error.message);
+      return;
+    }
+
+    if (editingPageId === page.id) resetPageForm();
+    setMessage("Skyrius ištrintas.");
+    await loadSitePages();
   }
 
   async function deleteBuildItem(item: BuildItem) {
@@ -1182,7 +1316,9 @@ async function handleForgotPassword() {
                   placeholder={"Kiekviena eilutė – atskira pozicija, pvz.:\n6 vnt. sviestinių sausainių su šokoladu\n4 vnt. imbierinių sausainių\n1 vnt. arbatos pakelis"}
                 />
                 <span className="admin-help">
-                  Rodoma svetainėje po produkto aprašymu kaip sąrašas.
+                  Rodoma svetainėje po produkto aprašymu kaip sąrašas. Eilutė, prasidedanti
+                  „!“ (pvz., „!PASTABA!“), rodoma kaip paryškinta pastaba, be sąrašo taško.
+                  Žodžius paryškinti gali apsupdamas **dviem žvaigždutėmis**.
                 </span>
               </label>
             )}
@@ -1384,6 +1520,100 @@ async function handleForgotPassword() {
               ))}
             </div>
           )}
+        </section>
+
+        <section className="admin-panel">
+          <h2>Taisyklės ir dažniausi klausimai</h2>
+          <p>
+            Čia redaguojami skyriai, kurie svetainėje rodomi bloke „Taisyklės ir dažniausi klausimai“
+            (taisyklės, privatumo politika, DUK ir pan.). Skyrius gali pridėti, keisti, paslėpti ar
+            ištrinti. Svetainėje rodomi tik pažymėti „Rodyti svetainėje“.
+          </p>
+
+          <form onSubmit={handlePageSave} className="admin-form">
+            <label>
+              Skyriaus pavadinimas
+              <input
+                value={pageForm.title}
+                onChange={(e) => setPageForm({ ...pageForm, title: e.target.value })}
+                placeholder="Pvz., Grąžinimo taisyklės"
+                required
+              />
+            </label>
+
+            <label>
+              Tekstas
+              <textarea
+                rows={16}
+                value={pageForm.body}
+                onChange={(e) => setPageForm({ ...pageForm, body: e.target.value })}
+                placeholder={"## 1. Pirmas skyrelis\n\nPastraipos tekstas. **Paryškintas tekstas.**\n\n- sąrašo punktas\n- kitas punktas"}
+                required
+              />
+              <span className="admin-help">
+                Antraštė: eilutė, prasidedanti „## “. Sąrašo punktas: eilutė, prasidedanti „- “.
+                Nauja pastraipa: tuščia eilutė. Paryškinimas: **tekstas** tarp dviejų žvaigždučių.
+                Neužpildytus laukus „[ĮRAŠYTI]“ pakeisk tikrais duomenimis.
+              </span>
+            </label>
+
+            <div className="admin-two-columns">
+              <label>
+                Rikiavimo numeris
+                <input
+                  type="number"
+                  value={pageForm.sort_order}
+                  onChange={(e) => setPageForm({ ...pageForm, sort_order: e.target.value })}
+                />
+              </label>
+
+              <label className="admin-checkbox">
+                <input
+                  type="checkbox"
+                  checked={pageForm.is_active}
+                  onChange={(e) => setPageForm({ ...pageForm, is_active: e.target.checked })}
+                />
+                Rodyti svetainėje
+              </label>
+            </div>
+
+            <div className="admin-form-actions">
+              <button disabled={loading}>
+                {loading ? "Saugoma..." : editingPageId === null ? "Pridėti skyrių" : "Išsaugoti skyrių"}
+              </button>
+              {editingPageId !== null && (
+                <button type="button" className="secondary" onClick={resetPageForm}>
+                  Atšaukti redagavimą
+                </button>
+              )}
+            </div>
+          </form>
+
+          <div className="admin-packaging-catalog">
+            {sitePages.length === 0 ? (
+              <p>Skyrių dar nėra.</p>
+            ) : sitePages.map((page) => (
+              <div className="admin-packaging-option" key={page.id}>
+                <div>
+                  <strong>{page.title}</strong>
+                  <span className={page.is_active ? "status active" : "status hidden"}>
+                    {page.is_active ? "Rodomas svetainėje" : "Paslėptas"}
+                  </span>
+                </div>
+                <div className="admin-product-actions">
+                  <button type="button" className="secondary" onClick={() => startEditPage(page)}>
+                    Redaguoti
+                  </button>
+                  <button type="button" className="secondary" onClick={() => toggleSitePage(page)}>
+                    {page.is_active ? "Paslėpti" : "Rodyti"}
+                  </button>
+                  <button type="button" className="danger" onClick={() => deleteSitePage(page)}>
+                    Ištrinti
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </section>
       </div>
 

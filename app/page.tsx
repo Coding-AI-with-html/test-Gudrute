@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   type FormEvent,
+  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
 
@@ -13,6 +14,14 @@ import {
   type PackagingChoice,
   type PackagingOption,
 } from "@/lib/products";
+
+// Informacijos / taisyklių puslapis (redaguojamas administravime).
+type SitePage = {
+  id: number;
+  slug: string | null;
+  title: string;
+  body: string;
+};
 
 // Rinkinio produktas iš katalogo (pvz., dešra). Kainą nustato administratorius.
 type BuildCatalogItem = {
@@ -108,6 +117,105 @@ function getCartItemUnitPrice(product: Product, item: CartItem): number {
 
 
 
+// Paryškina tekstą, apsuptą **dvigubomis žvaigždutėmis**.
+function renderInline(text: string) {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((part, index) =>
+    part.startsWith("**") && part.endsWith("**") && part.length > 4 ? (
+      <strong key={index}>{part.slice(2, -2)}</strong>
+    ) : (
+      part
+    )
+  );
+}
+
+// Taisyklių tekstas iš administravimo: „## Antraštė“, „- punktas“, tuščia eilutė skiria
+// pastraipas, **paryškinimas**.
+function renderRichText(body: string) {
+  const out: ReactNode[] = [];
+  let paragraph: string[] = [];
+  let list: string[] = [];
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    const lines = paragraph;
+    out.push(
+      <p key={`p-${out.length}`}>
+        {lines.map((line, index) => (
+          <span key={index}>
+            {index > 0 && <br />}
+            {renderInline(line)}
+          </span>
+        ))}
+      </p>
+    );
+    paragraph = [];
+  };
+
+  const flushList = () => {
+    if (!list.length) return;
+    const items = list;
+    out.push(
+      <ul key={`l-${out.length}`}>
+        {items.map((item, index) => (
+          <li key={index}>{renderInline(item)}</li>
+        ))}
+      </ul>
+    );
+    list = [];
+  };
+
+  body.split("\n").forEach((rawLine) => {
+    const line = rawLine.trim();
+
+    if (!line) {
+      flushParagraph();
+      flushList();
+    } else if (line.startsWith("## ")) {
+      flushParagraph();
+      flushList();
+      out.push(<h4 key={`h-${out.length}`}>{renderInline(line.slice(3))}</h4>);
+    } else if (line.startsWith("- ")) {
+      flushParagraph();
+      list.push(line.slice(2));
+    } else {
+      flushList();
+      paragraph.push(line);
+    }
+  });
+
+  flushParagraph();
+  flushList();
+  return out;
+}
+
+// Rinkinio sudėties tekstas iš administravimo: kiekviena eilutė – sąrašo punktas;
+// eilutė, prasidedanti „!“, rodoma kaip paryškinta pastaba.
+type ContentBlock =
+  | { type: "list"; items: string[] }
+  | { type: "note"; text: string };
+
+function parseContents(contents: string): ContentBlock[] {
+  const blocks: ContentBlock[] = [];
+
+  contents
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .forEach((line) => {
+      if (line.startsWith("!")) {
+        const text = line.replace(/^!+\s*/, "");
+        if (text) blocks.push({ type: "note", text });
+        return;
+      }
+
+      const last = blocks[blocks.length - 1];
+      if (last && last.type === "list") last.items.push(line);
+      else blocks.push({ type: "list", items: [line] });
+    });
+
+  return blocks;
+}
+
 const categories = [
   "Dovanų rinkiniai",
   "Pakavimo paslaugos",
@@ -131,6 +239,8 @@ export default function Home() {
   const [productsError, setProductsError] = useState("");
 
   const [buildCatalog, setBuildCatalog] = useState<BuildCatalogItem[]>([]);
+  const [sitePages, setSitePages] = useState<SitePage[]>([]);
+  const [openPageId, setOpenPageId] = useState<number | null>(null);
 
   const [packagingConfigs, setPackagingConfigs] = useState<
     Record<number, PackagingConfig>
@@ -164,6 +274,39 @@ export default function Home() {
     window.addEventListener("pageshow", handlePageShow);
     return () => window.removeEventListener("pageshow", handlePageShow);
   }, []);
+
+  // Taisyklės / DUK: neprivalomas turinys, todėl klaida tiesiog palieka sąrašą tuščią.
+  useEffect(() => {
+    let active = true;
+
+    async function loadSitePages() {
+      const { data, error } = await supabase
+        .from("site_pages")
+        .select("id, slug, title, body")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true })
+        .order("id", { ascending: true });
+
+      if (!active) return;
+
+      if (error) {
+        console.error("Nepavyko įkelti taisyklių:", error.message);
+        return;
+      }
+
+      setSitePages(
+        ((data ?? []) as { id: number; slug: string | null; title: string; body: string }[]).map(
+          (row) => ({ id: Number(row.id), slug: row.slug, title: row.title, body: row.body })
+        )
+      );
+    }
+
+    void loadSitePages();
+
+    return () => {
+      active = false;
+    };
+  }, [supabase]);
 
   useEffect(() => {
     let active = true;
@@ -675,6 +818,11 @@ export default function Home() {
           <a href="#apie" onClick={() => setMenuOpen(false)}>
             Apie mus
           </a>
+          {sitePages.length > 0 && (
+            <a href="#taisykles" onClick={() => setMenuOpen(false)}>
+              Taisyklės
+            </a>
+          )}
           <a href="#kontaktai" onClick={() => setMenuOpen(false)}>
             Kontaktai
           </a>
@@ -972,15 +1120,27 @@ export default function Home() {
                         >
                           Kas įeina į rinkinį
                         </strong>
-                        <ul style={{ margin: 0, paddingLeft: 18 }}>
-                          {product.contents
-                            .split("\n")
-                            .map((line) => line.trim())
-                            .filter(Boolean)
-                            .map((line, index) => (
-                              <li key={`${product.id}-content-${index}`}>{line}</li>
-                            ))}
-                        </ul>
+                        {parseContents(product.contents).map((block, blockIndex) =>
+                          block.type === "list" ? (
+                            <ul
+                              key={`${product.id}-block-${blockIndex}`}
+                              style={{ margin: 0, paddingLeft: 18 }}
+                            >
+                              {block.items.map((line, index) => (
+                                <li key={`${product.id}-content-${blockIndex}-${index}`}>
+                                  {renderInline(line)}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p
+                              key={`${product.id}-block-${blockIndex}`}
+                              className="product-contents-note"
+                            >
+                              {renderInline(block.text)}
+                            </p>
+                          )
+                        )}
                       </div>
                     )}
                   </div>
@@ -1325,6 +1485,42 @@ export default function Home() {
         ) : null}
       </section>
 
+      {sitePages.length > 0 && (
+        <section className="section rules-section" id="taisykles" aria-labelledby="rules-title">
+          <div className="section-heading">
+            <p className="eyebrow">INFORMACIJA</p>
+            <h2 id="rules-title">Taisyklės ir <em>dažniausi klausimai</em></h2>
+          </div>
+
+          <div className="rules-list">
+            {sitePages.map((page) => {
+              const open = openPageId === page.id;
+
+              return (
+                <div className={open ? "rule-item open" : "rule-item"} key={page.id}>
+                  <button
+                    type="button"
+                    className="rule-toggle"
+                    aria-expanded={open}
+                    aria-controls={`rule-body-${page.id}`}
+                    onClick={() => setOpenPageId(open ? null : page.id)}
+                  >
+                    <span>{page.title}</span>
+                    <span className="rule-icon" aria-hidden="true">{open ? "−" : "+"}</span>
+                  </button>
+
+                  {open && (
+                    <div className="rule-body" id={`rule-body-${page.id}`}>
+                      {renderRichText(page.body)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       <section className="contact-section" id="kontaktai">
         <div className="contact-layout">
           <div className="contact-copy">
@@ -1423,7 +1619,18 @@ export default function Home() {
             )}
 
             <p className="form-hint">
-              Atsiųsdami užklausą sutinkate, kad tvarkytume jūsų pateiktus asmens duomenis tikslui atsakyti į jūsų užklausą. Daugiau apie tai skaitykite mūsų privatumo politikoje.
+              Atsiųsdami užklausą sutinkate, kad tvarkytume jūsų pateiktus asmens duomenis tikslui atsakyti į jūsų užklausą. Daugiau apie tai skaitykite mūsų{" "}
+              <a
+                className="inline-link"
+                href="#taisykles"
+                onClick={() => {
+                  const policy = sitePages.find((page) => page.slug === "privatumo-politika");
+                  if (policy) setOpenPageId(policy.id);
+                }}
+              >
+                privatumo politikoje
+              </a>
+              .
             </p>
           </form>
         </div>
@@ -1743,6 +1950,7 @@ export default function Home() {
           <div className="footer-links">
             <a href="#paslaugos">Paslaugos</a>
             <a href="#parduotuve">Parduotuvė</a>
+            {sitePages.length > 0 && <a href="#taisykles">Taisyklės</a>}
             <a href="#kontaktai">Kontaktai</a>
           </div>
         </div>

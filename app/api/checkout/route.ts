@@ -5,9 +5,6 @@ import { createPaymentLink } from "@/lib/paysera";
 
 export const runtime = "nodejs";
 
-// Turi sutapti su greetingCardPrice (2.00 €) puslapyje page.tsx.
-const GREETING_CARD_CENTS = 200;
-
 type IncomingItem = {
   productId: number;
   quantity: number;
@@ -15,8 +12,6 @@ type IncomingItem = {
   packaging?: string | null;
   itemNote?: string;
   packagingNote?: string;
-  giftCard?: boolean;
-  giftMessage?: string;
 };
 
 const bad = (error: string, status = 400) =>
@@ -110,16 +105,15 @@ export async function POST(request: Request) {
         }
 
         packaging = option.name;
-        // Galutinė kaina = produkto kaina + pakavimo būdo kaina (kaip page.tsx).
-        if (option.price !== null) unitCents += toCents(option.price);
+        // Kaip page.tsx: galutinė kaina = produkto kaina + pakavimo būdo kaina.
+        if (option.price !== null) {
+          unitCents += toCents(option.price);
+        }
       } else {
         // Senas produktas be kainų katalogo – pakavimo kaina nepridedama.
         packaging = clip(item.packaging, 100) || null;
       }
     }
-
-    const giftCard = isPackaging && Boolean(item.giftCard);
-    if (giftCard) unitCents += GREETING_CARD_CENTS;
 
     totalCents += unitCents * quantity;
 
@@ -131,8 +125,6 @@ export async function POST(request: Request) {
       packaging,
       item_note: clip(item.itemNote, 500),
       packaging_note: clip(item.packagingNote, 500),
-      gift_card: giftCard,
-      gift_message: giftCard ? clip(item.giftMessage, 500) : "",
     });
   }
 

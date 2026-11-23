@@ -42,8 +42,6 @@ type PackagingConfig = {
   packagingPrice: number | null;
   packagingNote: string;
   itemNote: string;
-  giftCard: boolean;
-  giftMessage: string;
 };
 
 type CartItem = {
@@ -55,14 +53,7 @@ type CartItem = {
   packagingPrice?: number | null;
   packagingNote?: string;
   itemNote?: string;
-  giftCard?: boolean;
-  giftMessage?: string;
 };
-
-// Pakeisk šią sumą į tikrą palinkėjimo kortelės kainą.
-const greetingCardPrice = 2.0;
-
-
 
 function createPackagingConfig(product: Product): PackagingConfig {
   const firstOption = product.packaging_options?.[0];
@@ -74,26 +65,24 @@ function createPackagingConfig(product: Product): PackagingConfig {
     packagingPrice: firstOption?.price ?? null,
     packagingNote: "",
     itemNote: "",
-    giftCard: false,
-    giftMessage: "",
   };
 }
 
-// Galutinė kaina = produkto kaina + pasirinkto pakavimo būdo kaina (+ palinkėjimo kortelė).
+// Galutinė kaina = produkto kaina + pasirinkto pakavimo būdo kaina.
 // Jei pakavimo būdo kaina nenustatyta, prie produkto kainos nieko nepridedama.
 function getCartItemUnitPrice(product: Product, item: CartItem): number {
   const packagingPrice =
     product.category === "Pakavimo paslaugos" ? item.packagingPrice ?? 0 : 0;
 
-  return product.price + packagingPrice + (item.giftCard ? greetingCardPrice : 0);
+  return product.price + packagingPrice;
 }
 
 
 
 
 const categories = [
-  "Pakavimo paslaugos",
   "Dovanų rinkiniai",
+  "Pakavimo paslaugos",
   "Visos prekės",
 ] as const;
 
@@ -126,7 +115,7 @@ export default function Home() {
   const [galleryImageIndex, setGalleryImageIndex] = useState(0);
 
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [filter, setFilter] = useState<Category>("Pakavimo paslaugos");
+  const [filter, setFilter] = useState<Category>("Dovanų rinkiniai");
   const [menuOpen, setMenuOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
   const [notice, setNotice] = useState("");
@@ -417,11 +406,6 @@ export default function Home() {
       return;
     }
 
-    if (config?.giftCard && !config.giftMessage.trim()) {
-      setNotice("Įrašyk palinkėjimo tekstą arba nuimk kortelės pasirinkimą.");
-      return;
-    }
-
     const lineId =
       typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
@@ -487,8 +471,6 @@ export default function Home() {
             packaging: item.packaging ?? null,
             itemNote: item.itemNote ?? "",
             packagingNote: item.packagingNote ?? "",
-            giftCard: Boolean(item.giftCard),
-            giftMessage: item.giftMessage ?? "",
           })),
         }),
       });
@@ -533,7 +515,6 @@ export default function Home() {
           : "",
         item.packagingNote ? `Papildoma įpakavimo idėja: ${item.packagingNote}` : "",
         item.itemNote ? `Daiktas, kurį reikia supakuoti: ${item.itemNote}` : "",
-        item.giftCard ? `Mokama palinkėjimo kortelė: ${item.giftMessage || "Tekstas nenurodytas"}` : "",
       ].filter(Boolean);
 
       return [
@@ -688,7 +669,11 @@ export default function Home() {
         </div>
 
         <div className="service-grid">
-          <a className="service-card service-one" href="#pakavimas">
+          <a
+            className="service-card service-one"
+            href="#parduotuve"
+            onClick={() => setFilter("Pakavimo paslaugos")}
+          >
             <span className="service-number">01 / PASLAUGA</span>
             <div>
               <h3>Dovanų pakavimas</h3>
@@ -699,7 +684,11 @@ export default function Home() {
             </div>
           </a>
 
-          <a className="service-card service-two" href="#rinkiniai">
+          <a
+            className="service-card service-two"
+            href="#parduotuve"
+            onClick={() => setFilter("Dovanų rinkiniai")}
+          >
             <span className="service-number">02 / KOLEKCIJA</span>
             <div>
               <h3>Dovanų rinkiniai</h3>
@@ -777,8 +766,7 @@ export default function Home() {
             const selectedPackagingPrice = selectedPackagingOption?.price ?? 0;
             const displayedProductPrice =
               product.price +
-              (product.category === "Pakavimo paslaugos" ? selectedPackagingPrice : 0) +
-              (config.giftCard ? greetingCardPrice : 0);
+              (product.category === "Pakavimo paslaugos" ? selectedPackagingPrice : 0);
 
             const imageIndex = Math.min(
               activeImages[product.id] ?? 0,
@@ -951,9 +939,7 @@ export default function Home() {
                       </>
                     )}
 
-                    <p className="package-fixed">
-                      Pakavimo kaina: <strong>+ {money(selectedPackagingPrice)}</strong>
-                    </p>
+                    
 
                     {config.packaging === "Kitas variantas" && (
                       <>
@@ -990,47 +976,6 @@ export default function Home() {
                       }
                       placeholder="Daikto pavadinimas ir apytikslis dydis, pvz., knyga A5 formato arba kosmetikos rinkinys..."
                     />
-
-                    <label className="gift-card-toggle">
-                      <input
-                        type="checkbox"
-                        checked={config.giftCard}
-                        onChange={(event) =>
-                          updatePackagingConfig(product.id, {
-                            giftCard: event.target.checked,
-                            giftMessage: event.target.checked
-                              ? config.giftMessage
-                              : "",
-                          })
-                        }
-                      />
-                      Pridėti palinkėjimo kortelę (+ {money(greetingCardPrice)})
-                    </label>
-
-                    {config.giftCard && (
-                      <>
-                        <label htmlFor={`greeting-${product.id}`}>
-                          Tavo palinkėjimas
-                        </label>
-
-                        <textarea
-                          id={`greeting-${product.id}`}
-                          rows={2}
-                          required
-                          value={config.giftMessage}
-                          onChange={(event) =>
-                            updatePackagingConfig(product.id, {
-                              giftMessage: event.target.value,
-                            })
-                          }
-                          placeholder="Parašyk savo žodžius..."
-                        />
-
-                        <small className="option-hint">
-                          Pvz., „Su meile ir šilčiausiais linkėjimais!“
-                        </small>
-                      </>
-                    )}
                   </div>
                 )}
 
@@ -1066,7 +1011,11 @@ export default function Home() {
             <br />
             <em>Dovanoti gražiai – dar geriau!</em>
           </h2>
-          <a className="button button-light" href="#rinkiniai">
+          <a
+            className="button button-light"
+            href="#parduotuve"
+            onClick={() => setFilter("Dovanų rinkiniai")}
+          >
             Peržiūrėti dovanų rinkinius <span>↗</span>
           </a>
         </div>
@@ -1156,7 +1105,6 @@ export default function Home() {
                       {item.packaging && <p className="cart-config">Įpakavimo būdas: {item.packaging} (+ {money(item.packagingPrice ?? 0)})</p>}
                       {item.itemNote && <p className="cart-config">Daiktas, kurį supakuoti: {item.itemNote}</p>}
                       {item.packagingNote && <p className="cart-config">Įpakavimo idėja: {item.packagingNote}</p>}
-                      {item.giftCard && <p className="cart-config">Palinkėjimo kortelė: „{item.giftMessage}“</p>}
                     </div>
 
                     <div className="quantity-control">
@@ -1415,7 +1363,6 @@ export default function Home() {
                     {item.packaging && <p className="drawer-config">Įpakavimo būdas: {item.packaging} (+ {money(item.packagingPrice ?? 0)})</p>}
                     {item.itemNote && <p className="drawer-config">Daiktas, kurį supakuoti: {item.itemNote}</p>}
                     {item.packagingNote && <p className="drawer-config">Įpakavimo idėja: {item.packagingNote}</p>}
-                    {item.giftCard && <p className="drawer-config">Kortelė: „{item.giftMessage}“</p>}
 
                     <div className="drawer-quantity">
                       <button

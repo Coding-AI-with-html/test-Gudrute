@@ -11,6 +11,14 @@ type PackagingOption = {
   sort_order: number;
 };
 
+type BuildItem = {
+  id: number;
+  name: string;
+  price: number;
+  is_active: boolean;
+  sort_order: number;
+};
+
 type Product = {
   id: number;
   name: string;
@@ -25,6 +33,7 @@ type Product = {
   packaging_mode: "none" | "fixed_paper_box" | "fixed_basket" | "custom";
   packaging_choices: string[];
   packaging_option_ids: number[];
+  builder: boolean;
 };
 
 type EditorForm = {
@@ -39,6 +48,7 @@ type EditorForm = {
   sort_order: string;
   packaging_mode: Product["packaging_mode"];
   packaging_option_ids: number[];
+  builder: boolean;
 };
 
 const emptyForm: EditorForm = {
@@ -53,6 +63,7 @@ const emptyForm: EditorForm = {
   sort_order: "0",
   packaging_mode: "none",
   packaging_option_ids: [],
+  builder: false,
 };
 
 function getStoragePath(url: string): string | null {
@@ -85,6 +96,10 @@ export default function AdminPage() {
   const [packagingOptionName, setPackagingOptionName] = useState("");
   const [packagingOptionPrice, setPackagingOptionPrice] = useState("");
   const [editingPackagingOptionId, setEditingPackagingOptionId] = useState<number | null>(null);
+  const [buildItems, setBuildItems] = useState<BuildItem[]>([]);
+  const [buildItemName, setBuildItemName] = useState("");
+  const [buildItemPrice, setBuildItemPrice] = useState("");
+  const [editingBuildItemId, setEditingBuildItemId] = useState<number | null>(null);
   const [form, setForm] = useState<EditorForm>(emptyForm);
   const [files, setFiles] = useState<File[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -106,6 +121,29 @@ export default function AdminPage() {
     }
 
     setPackagingOptions((data ?? []) as PackagingOption[]);
+  }, [supabase]);
+
+  const loadBuildItems = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("build_items")
+      .select("id, name, price, is_active, sort_order")
+      .order("sort_order", { ascending: true })
+      .order("name", { ascending: true });
+
+    if (error) {
+      setError("Nepavyko įkelti rinkinio produktų (ar paleistas build-items.sql?): " + error.message);
+      return;
+    }
+
+    setBuildItems(
+      (data ?? []).map((row: any) => ({
+        id: Number(row.id),
+        name: row.name,
+        price: Number(row.price ?? 0),
+        is_active: Boolean(row.is_active),
+        sort_order: Number(row.sort_order ?? 0),
+      }))
+    );
   }, [supabase]);
 
   const loadProducts = useCallback(async () => {
@@ -141,6 +179,7 @@ export default function AdminPage() {
         ...row,
         packaging_choices: row.packaging_choices ?? [],
         packaging_option_ids: idsByProduct.get(Number(row.id)) ?? [],
+        builder: Boolean(row.builder),
       })) as Product[]
     );
   }, [supabase]);
@@ -163,7 +202,7 @@ export default function AdminPage() {
         setError(error.message);
       } else if (data.session?.user.id === adminUid) {
         setIsAdmin(true);
-        await Promise.all([loadProducts(), loadPackagingOptions()]);
+        await Promise.all([loadProducts(), loadPackagingOptions(), loadBuildItems()]);
       } else if (data.session) {
         await supabase.auth.signOut();
       }
@@ -176,7 +215,7 @@ export default function AdminPage() {
     return () => {
       alive = false;
     };
-  }, [supabase, adminUid, loadProducts, loadPackagingOptions]);
+  }, [supabase, adminUid, loadProducts, loadPackagingOptions, loadBuildItems]);
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -203,7 +242,7 @@ export default function AdminPage() {
       setIsAdmin(true);
       setPassword("");
       setMessage("Sėkmingai prisijungei!");
-      await Promise.all([loadProducts(), loadPackagingOptions()]);
+      await Promise.all([loadProducts(), loadPackagingOptions(), loadBuildItems()]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Prisijungti nepavyko.");
     } finally {
@@ -216,6 +255,7 @@ export default function AdminPage() {
     setIsAdmin(false);
     setProducts([]);
     setPackagingOptions([]);
+    setBuildItems([]);
     setMessage("");
     setError("");
   }
@@ -275,6 +315,7 @@ async function handleForgotPassword() {
       sort_order: String(product.sort_order ?? 0),
       packaging_mode: product.packaging_mode ?? "none",
       packaging_option_ids: product.packaging_option_ids ?? [],
+      builder: Boolean(product.builder),
     });
 
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -364,8 +405,17 @@ async function handleForgotPassword() {
       (option) => form.packaging_option_ids.includes(option.id) && option.is_active
     );
 
-    if (form.category === "Pakavimo paslaugos" && selectedOptions.length === 0) {
+    const usesPackaging =
+      form.category === "Pakavimo paslaugos" ||
+      (form.category === "Dovanų rinkiniai" && form.builder);
+
+    if (usesPackaging && selectedOptions.length === 0) {
       setError("Pasirink bent vieną aktyvų pakavimo būdą.");
+      return;
+    }
+
+    if (form.builder && form.category === "Dovanų rinkiniai" && !buildItems.some((item) => item.is_active)) {
+      setError("Pirmiausia sukurk bent vieną rinkinio produktą kataloge „Rinkinio produktai“.");
       return;
     }
 
@@ -380,20 +430,22 @@ async function handleForgotPassword() {
 
       const imageUrls = [...form.image_urls, ...uploaded.urls];
 
-      const selectedOptionIds =
-        form.category === "Pakavimo paslaugos"
-          ? selectedOptions.map((option) => option.id)
-          : [];
-      const selectedChoices = selectedOptions.map((option) => option.name);
+      const selectedOptionIds = usesPackaging
+        ? selectedOptions.map((option) => option.id)
+        : [];
+      const selectedChoices = usesPackaging
+        ? selectedOptions.map((option) => option.name)
+        : [];
 
       const payload = {
         name: form.name.trim(),
         category: form.category,
         price,
         description: form.description.trim(),
-        // Sudėtis naudojama tik dovanų rinkiniams.
+        // Sudėtis naudojama tik paruoštiems dovanų rinkiniams (ne „Susikurk pats“).
         contents:
-          form.category === "Dovanų rinkiniai" ? form.contents.trim() : "",
+          form.category === "Dovanų rinkiniai" && !form.builder ? form.contents.trim() : "",
+        builder: form.category === "Dovanų rinkiniai" && form.builder,
         label: form.label.trim(),
         image_urls: imageUrls,
         is_active: form.is_active,
@@ -403,7 +455,7 @@ async function handleForgotPassword() {
         packaging_choices: selectedChoices,
 
         packaging_mode:
-          form.category === "Dovanų rinkiniai"
+          !usesPackaging
             ? "none"
             : selectedChoices.length === 1 && selectedChoices[0] === "Popierinė dėžutė"
               ? "fixed_paper_box"
@@ -554,6 +606,135 @@ async function handleForgotPassword() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function startEditBuildItem(item: BuildItem) {
+    setEditingBuildItemId(item.id);
+    setBuildItemName(item.name);
+    setBuildItemPrice(String(item.price));
+    setError("");
+    setMessage("");
+  }
+
+  function resetBuildItemForm() {
+    setEditingBuildItemId(null);
+    setBuildItemName("");
+    setBuildItemPrice("");
+  }
+
+  async function handleBuildItemSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+
+    const name = buildItemName.trim();
+    const rawPrice = buildItemPrice.trim().replace(",", ".");
+    const price = Number(rawPrice);
+
+    if (!name) {
+      setError("Įrašyk rinkinio produkto pavadinimą.");
+      return;
+    }
+    if (rawPrice === "" || !Number.isFinite(price) || price < 0) {
+      setError("Įrašyk teisingą rinkinio produkto kainą.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const payload = { name, price, updated_at: new Date().toISOString() };
+
+      const result = editingBuildItemId === null
+        ? await supabase.from("build_items").insert({ ...payload, is_active: true })
+        : await supabase.from("build_items").update(payload).eq("id", editingBuildItemId);
+
+      if (result.error) throw result.error;
+
+      const wasNew = editingBuildItemId === null;
+      resetBuildItemForm();
+      setMessage(wasNew ? "Rinkinio produktas pridėtas." : "Rinkinio produktas atnaujintas.");
+      await loadBuildItems();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Nepavyko išsaugoti rinkinio produkto.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function toggleBuildItem(item: BuildItem) {
+    setError("");
+    setMessage("");
+    const { error } = await supabase
+      .from("build_items")
+      .update({ is_active: !item.is_active, updated_at: new Date().toISOString() })
+      .eq("id", item.id);
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    setMessage(item.is_active ? "Rinkinio produktas išjungtas." : "Rinkinio produktas vėl aktyvus.");
+    await loadBuildItems();
+  }
+
+  async function deleteBuildItem(item: BuildItem) {
+    if (!window.confirm(`Ar tikrai ištrinti rinkinio produktą „${item.name}“? Senų užsakymų tai nepaveiks.`)) return;
+
+    setError("");
+    setMessage("");
+
+    const { error } = await supabase.from("build_items").delete().eq("id", item.id);
+
+    if (error) {
+      setError("Nepavyko ištrinti: " + error.message);
+      return;
+    }
+
+    if (editingBuildItemId === item.id) resetBuildItemForm();
+    setMessage("Rinkinio produktas ištrintas.");
+    await loadBuildItems();
+  }
+
+  async function deletePackagingOption(option: PackagingOption) {
+    const usedBy = products
+      .filter((product) => product.packaging_option_ids.includes(option.id))
+      .map((product) => product.name);
+
+    const warning = usedBy.length
+      ? `\n\nJis šiuo metu priskirtas produktams: ${usedBy.join(", ")}. Iš jų jis bus pašalintas.`
+      : "";
+
+    if (!window.confirm(`Ar tikrai ištrinti pakavimo būdą „${option.name}“?${warning}`)) return;
+
+    setError("");
+    setMessage("");
+
+    const { error: linksError } = await supabase
+      .from("product_packaging_options")
+      .delete()
+      .eq("packaging_option_id", option.id);
+
+    if (linksError) {
+      setError("Nepavyko pašalinti pakavimo būdo iš produktų: " + linksError.message);
+      return;
+    }
+
+    const { error } = await supabase.from("packaging_options").delete().eq("id", option.id);
+
+    if (error) {
+      setError("Nepavyko ištrinti: " + error.message);
+      await Promise.all([loadProducts(), loadPackagingOptions()]);
+      return;
+    }
+
+    if (editingPackagingOptionId === option.id) resetPackagingOptionForm();
+    setForm((current) => ({
+      ...current,
+      packaging_option_ids: current.packaging_option_ids.filter((id) => id !== option.id),
+    }));
+    setMessage("Pakavimo būdas ištrintas.");
+    await Promise.all([loadProducts(), loadPackagingOptions()]);
   }
 
   async function togglePackagingOption(option: PackagingOption) {
@@ -714,7 +895,7 @@ async function handleForgotPassword() {
           <p>
             Čia gali pridėti naujų pakavimo būdų ir nustatyti kiekvieno kainą.
             Ši kaina pridedama prie produkto kainos: galutinė kaina =
-            produkto kaina + pasirinkto pakavimo būdo kaina.
+            produkto kaina + pasirinkto pakavimo būdo kaina. Klientas mato tik bendrą sumą.
           </p>
 
           <form onSubmit={handlePackagingOptionSave} className="admin-form admin-packaging-manager-form">
@@ -770,6 +951,79 @@ async function handleForgotPassword() {
                   <button type="button" className="secondary" onClick={() => togglePackagingOption(option)}>
                     {option.is_active ? "Išjungti" : "Aktyvinti"}
                   </button>
+                  <button type="button" className="danger" onClick={() => deletePackagingOption(option)}>
+                    Ištrinti
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="admin-panel">
+          <h2>Rinkinio produktų katalogas</h2>
+          <p>
+            Produktai, kuriuos klientas gali įsidėti į savo rinkinį („Susikurk pats“),
+            pvz., dešra ar sūris. Čia nustatai kiekvieno produkto kainą atskirai
+            nuo pakavimo kainos. Klientas mato tik bendrą sumą.
+          </p>
+
+          <form onSubmit={handleBuildItemSave} className="admin-form admin-packaging-manager-form">
+            <label>
+              Produkto pavadinimas
+              <input
+                value={buildItemName}
+                onChange={(e) => setBuildItemName(e.target.value)}
+                placeholder="Pvz., Rūkyta dešra"
+                required
+              />
+            </label>
+            <label>
+              Kaina (€) už 1 vnt.
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={buildItemPrice}
+                onChange={(e) => setBuildItemPrice(e.target.value)}
+                placeholder="Pvz., 4.50"
+                required
+              />
+            </label>
+            <div className="admin-form-actions">
+              <button disabled={loading}>
+                {loading ? "Saugoma..." : editingBuildItemId === null ? "Pridėti produktą" : "Išsaugoti produktą"}
+              </button>
+              {editingBuildItemId !== null && (
+                <button type="button" className="secondary" onClick={resetBuildItemForm}>
+                  Atšaukti
+                </button>
+              )}
+            </div>
+          </form>
+
+          <div className="admin-packaging-catalog">
+            {buildItems.length === 0 ? (
+              <p>Rinkinio produktų dar nėra. Sukurk pirmąjį aukščiau.</p>
+            ) : buildItems.map((item) => (
+              <div className="admin-packaging-option" key={item.id}>
+                <div>
+                  <strong>{item.name}</strong>
+                  <span>{money(item.price)}</span>
+                  <span className={item.is_active ? "status active" : "status hidden"}>
+                    {item.is_active ? "Aktyvus" : "Išjungtas"}
+                  </span>
+                </div>
+                <div className="admin-product-actions">
+                  <button type="button" className="secondary" onClick={() => startEditBuildItem(item)}>
+                    Keisti
+                  </button>
+                  <button type="button" className="secondary" onClick={() => toggleBuildItem(item)}>
+                    {item.is_active ? "Išjungti" : "Aktyvinti"}
+                  </button>
+                  <button type="button" className="danger" onClick={() => deleteBuildItem(item)}>
+                    Ištrinti
+                  </button>
                 </div>
               </div>
             ))}
@@ -800,6 +1054,7 @@ async function handleForgotPassword() {
                   setForm((current) => ({
                     ...current,
                     category,
+                    builder: category === "Dovanų rinkiniai" ? current.builder : false,
                     packaging_mode:
                       category === "Pakavimo paslaugos" ? "custom" : "none",
                     packaging_option_ids:
@@ -819,7 +1074,9 @@ async function handleForgotPassword() {
               <label>
                 {form.category === "Pakavimo paslaugos"
                   ? "Produkto kaina (€) – prie jos pridedama pasirinkto pakavimo būdo kaina"
-                  : "Kaina (€)"}
+                  : form.builder
+                    ? "Bazinė kaina (€) – prie jos pridedamos pasirinktų produktų ir pakavimo kainos (gali būti 0)"
+                    : "Kaina (€)"}
                 <input
                   type="number"
                   min="0"
@@ -831,13 +1088,39 @@ async function handleForgotPassword() {
               </label>
             </div>
 
-            {form.category === "Pakavimo paslaugos" && (
+            {form.category === "Dovanų rinkiniai" && (
+              <label className="admin-checkbox">
+                <input
+                  type="checkbox"
+                  checked={form.builder}
+                  onChange={(e) => {
+                    const builder = e.target.checked;
+                    setForm((current) => ({
+                      ...current,
+                      builder,
+                      packaging_option_ids: builder
+                        ? current.packaging_option_ids.length
+                          ? current.packaging_option_ids
+                          : packagingOptions.filter((option) => option.is_active).slice(0, 1).map((option) => option.id)
+                        : [],
+                    }));
+                  }}
+                />
+                <span>
+                  Rinkinį kuria klientas („Susikurk pats“): klientas renkasi produktus
+                  iš rinkinio produktų katalogo ir pakavimo būdą
+                </span>
+              </label>
+            )}
+
+            {(form.category === "Pakavimo paslaugos" || (form.category === "Dovanų rinkiniai" && form.builder)) && (
             <div className="admin-packaging-options">
               <strong>Pakavimo pasirinkimas</strong>
 
               <p>
-                Pažymėk visus įpakavimo būdus, kuriuos klientas
-                galės pasirinkti šiai paslaugai.
+                {form.category === "Pakavimo paslaugos"
+                  ? "Pažymėk visus įpakavimo būdus, kuriuos klientas galės pasirinkti šiai paslaugai."
+                  : "Pažymėk pakavimo būdus, kuriuos klientas galės pasirinkti savo rinkiniui. Rinkinio produktus klientas renkasi iš visų aktyvių katalogo produktų."}
               </p>
 
               {packagingOptions.map((option) => {
@@ -889,7 +1172,7 @@ async function handleForgotPassword() {
               />
             </label>
 
-            {form.category === "Dovanų rinkiniai" && (
+            {form.category === "Dovanų rinkiniai" && !form.builder && (
               <label>
                 Rinkinio sudėtis (nebūtina)
                 <textarea
@@ -1042,7 +1325,7 @@ async function handleForgotPassword() {
         <section className="admin-panel">
           <div className="admin-list-heading">
             <h2>Produktai ({products.length})</h2>
-            <button type="button" className="secondary" onClick={loadProducts}>
+            <button type="button" className="secondary" onClick={() => { void loadProducts(); void loadBuildItems(); }}>
               Atnaujinti sąrašą
             </button>
           </div>
@@ -1064,8 +1347,15 @@ async function handleForgotPassword() {
                     <h3>{product.name}</h3>
                     <strong>
                       {money(product.price)}
-                      {product.category === "Pakavimo paslaugos" ? " + pakavimas" : ""}
+                      {product.category === "Pakavimo paslaugos"
+                        ? " + pakavimas"
+                        : product.builder
+                          ? " + pasirinkti produktai + pakavimas"
+                          : ""}
                     </strong>
+                    {product.builder && (
+                      <span className="admin-help">Rinkinį kuria klientas („Susikurk pats“)</span>
+                    )}
                     {product.packaging_option_ids.length > 0 && (
                       <span className="admin-help">
                         Pakavimas: {product.packaging_option_ids

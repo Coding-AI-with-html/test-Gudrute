@@ -17,7 +17,7 @@
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; scroll-padding-top: 100px; }
 body { margin: 0; background: var(--cream); color: var(--brown); font-family: var(--sans); font-size: 14px; -webkit-font-smoothing: antialiased; }
-body:has(.cart-drawer-layer) { overflow: hidden; }
+body:has(.cart-drawer-layer), body:has(.checkout-layer) { overflow: hidden; }
 a { color: inherit; text-decoration: none; }
 button, input, textarea, select { font: inherit; }
 button { color: inherit; }
@@ -276,7 +276,7 @@ h1 em, h2 em { color: var(--rose); font-weight: 400; }
   .hero h1 { font-size: clamp(40px, 5.5vw, 55px); }
   .section { width: calc(100% - 56px); padding-block: 65px; }
   .products-section { width: 100%; padding-inline: 28px; }
-  .product-grid { gap: 14px; }
+  .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
   .product-info { padding: 14px; }
   .product-info h3 { font-size: 19px; }
   .contact-section { padding-inline: 28px; }
@@ -317,7 +317,7 @@ h1 em, h2 em { color: var(--rose); font-weight: 400; }
   .products-top { align-items: flex-start; flex-direction: column; gap: 18px; }
   .filters { gap: 7px; }
   .filter { min-height: 35px; padding-inline: 11px; font-size: 9px; }
-  .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
+  .product-grid { grid-template-columns: minmax(0, 1fr); gap: 18px; }
   .product-image { aspect-ratio: 1 / .9; }
   .product-label, .product-category { top: 7px; padding: 5px 6px; font-size: 7px; }
   .product-label { left: 7px; }
@@ -811,4 +811,403 @@ h1 em, h2 em { color: var(--rose); font-weight: 400; }
 @media (max-width: 700px) {
   .rule-toggle { font-size: 17px; }
   .rule-body { font-size: 13px; }
+}
+
+
+/* ==========================================================================
+   Produktų kortelės: išdėstymas (desktop + mobilus)
+   ========================================================================== */
+
+/* Kortelė – vertikalus stulpelis: apatinė eilutė (kaina + mygtukas) visada prie apačios. */
+.product-card { display: flex; flex-direction: column; }
+.product-image { flex: 0 0 auto; }
+.product-info { flex: 1 1 auto; justify-content: flex-start; min-width: 0; }
+.product-info > div { min-width: 0; }
+.product-info h3,
+.product-info p { overflow-wrap: anywhere; }
+
+.product-buy { margin-top: auto; padding-top: 18px; }
+.product-buy strong { white-space: nowrap; }
+
+/* Miniatiūros (anksčiau buvo inline stiliai) */
+.product-thumbnails {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 19px 0;
+}
+
+.product-thumb {
+  flex: 0 0 auto;
+  width: 55px;
+  height: 55px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.product-thumb.active { border: 2px solid var(--brown); }
+
+.product-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* „Kas įeina į rinkinį“ (anksčiau inline stiliai) */
+.product-contents {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.product-contents-title {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+.product-contents-list { margin: 0; padding-left: 18px; }
+.product-contents-list li { overflow-wrap: anywhere; }
+
+/* Pasirinkimai kortelėje */
+.product-options { min-width: 0; }
+
+.product-options select,
+.product-options textarea {
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* „Susikurk pats“ – produktų pasirinkimas (anksčiau inline stiliai) */
+.build-picker { display: grid; gap: 8px; margin-bottom: 12px; }
+
+.build-picker-title {
+  font-size: 12px;
+  letter-spacing: 1.5px;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.build-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.build-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.build-qty {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.build-qty-button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid #d8d3ca;
+  border-radius: 50%;
+  background: white;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.build-qty-button:hover:not(:disabled) { border-color: var(--rose); background: var(--rose-light); }
+.build-qty-button:disabled { opacity: .4; cursor: default; }
+.build-qty-value { min-width: 18px; text-align: center; }
+
+/* Telefonai: viena kortelė eilutėje, didesni paspaudžiami elementai ir tekstas. */
+@media (max-width: 700px) {
+  .product-info { min-height: 0; padding: 16px; }
+  .product-info h3 { font-size: 20px; }
+  .product-info p { font-size: 13px; }
+
+  .product-label,
+  .product-category { top: 10px; padding: 6px 9px; font-size: 10px; }
+  .product-label { left: 10px; max-width: 42%; }
+  .product-category { right: 10px; max-width: 48%; }
+
+  .product-thumbnails { padding: 10px 16px 0; }
+  .product-thumb { width: 52px; height: 52px; }
+
+  .product-contents { font-size: 13px; }
+
+  .product-options { gap: 10px; }
+  .product-options > label:not(.gift-card-toggle) { font-size: 12px; }
+
+  /* 16px – kad iPhone nepriartintų ekrano paspaudus laukelį */
+  .product-options select,
+  .product-options textarea { font-size: 16px; }
+  .product-options select { min-height: 46px; }
+  .product-options textarea { min-height: 84px; }
+
+  .package-fixed { font-size: 13px; }
+  .option-hint { font-size: 12px; }
+
+  .build-picker { gap: 10px; }
+  .build-row { font-size: 14px; }
+  .build-qty { gap: 10px; }
+  .build-qty-button { width: 38px; height: 38px; font-size: 20px; }
+  .build-qty-value { min-width: 22px; font-size: 15px; }
+
+  .product-buy { padding-top: 16px; }
+  .product-buy strong { font-size: 22px; }
+  .add-button { width: 46px; height: 46px; font-size: 26px; }
+}
+
+
+/* ==========================================================================
+   Krepšelio šoninis skydelis: pristatymas, užsakymo forma
+   ========================================================================== */
+
+/* Apačia slenka pati, kad ilga forma (pristatymo adresas) neišstumtų prekių ir mygtuko iš ekrano. */
+.drawer-items { min-height: 110px; }
+.drawer-footer { max-height: 65vh; max-height: 65dvh; overflow-y: auto; overscroll-behavior: contain; }
+
+.drawer-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  margin-bottom: 6px;
+  color: var(--brown-light);
+  font-size: 13px;
+}
+
+.drawer-checkout-form { display: grid; gap: 8px; margin: 12px 0; }
+
+.drawer-input {
+  width: 100%;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #d8d3ca;
+  border-radius: 9px;
+  background: white;
+  color: #292722;
+  font: inherit;
+}
+
+.drawer-input-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+.delivery-picker { display: grid; gap: 8px; min-width: 0; margin: 0 0 4px; padding: 0; border: 0; }
+
+.delivery-picker legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: var(--brown);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.delivery-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d8d3ca;
+  border-radius: 9px;
+  background: white;
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+}
+
+.delivery-option:hover { border-color: var(--rose); }
+.delivery-option.active { border-color: var(--brown); background: #fff8f5; }
+.delivery-option input { flex: 0 0 auto; margin: 0; accent-color: var(--brown); }
+.delivery-option-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: 13px; line-height: 1.4; }
+.delivery-option-price { flex: 0 0 auto; font-size: 13px; font-weight: 600; white-space: nowrap; }
+
+/* 16px – kad iPhone nepriartintų ekrano paspaudus laukelį */
+@media (max-width: 700px) {
+  .drawer-input { font-size: 16px; }
+  .delivery-option { padding: 13px 12px; }
+}
+
+
+/* Paštomatų paieška pagal adresą */
+.terminal-results {
+  display: grid;
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #d8d3ca;
+  border-radius: 9px;
+  background: white;
+}
+
+.terminal-result {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--brown);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminal-result:last-child { border-bottom: 0; }
+.terminal-result:hover,
+.terminal-result:focus-visible { background: #fff4ef; }
+.terminal-result strong { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.terminal-result span { color: var(--brown-light); font-size: 12px; overflow-wrap: anywhere; }
+.terminal-results-empty { margin: 0; padding: 12px; color: var(--brown-light); font-size: 12px; line-height: 1.5; }
+.terminal-or { margin: 2px 0 0; }
+
+
+/* ==========================================================================
+   Atskiras užsakymo pateikimo langas (kontaktai, pristatymas, santrauka)
+   ========================================================================== */
+.checkout-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 28px 16px;
+  background: rgb(39 27 22 / 55%);
+  backdrop-filter: blur(3px);
+  animation: layer-in .18s ease-out;
+}
+
+.checkout-modal {
+  width: min(1040px, 100%);
+  margin: 0 auto;
+  padding: 30px;
+  border-radius: 14px;
+  background: var(--cream);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 28%);
+}
+
+.checkout-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.checkout-header .eyebrow { margin-bottom: 7px; }
+.checkout-header h2 { margin: 0; font-family: var(--serif); font-size: 32px; font-weight: 400; line-height: 1.2; }
+.checkout-header h2 span { color: var(--rose); }
+
+.checkout-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, .75fr);
+  gap: 32px;
+  align-items: start;
+}
+
+.checkout-form { display: grid; gap: 28px; min-width: 0; }
+.checkout-step { display: grid; gap: 12px; min-width: 0; }
+
+.checkout-step h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 21px;
+  font-weight: 400;
+}
+
+.checkout-step h3 > span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--brown);
+  color: white;
+  font-family: var(--sans);
+  font-size: 13px;
+}
+
+.checkout-field { display: grid; gap: 6px; }
+.checkout-field label { color: var(--brown); font-size: 12px; font-weight: 600; }
+.checkout-fields { display: grid; gap: 8px; }
+.checkout-fields:empty { display: none; }
+
+.checkout-summary {
+  position: sticky;
+  top: 16px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid var(--line);
+  background: var(--white);
+  box-shadow: var(--shadow);
+}
+
+.checkout-summary h3 { margin: 0; font-family: var(--serif); font-size: 21px; font-weight: 400; }
+
+.checkout-items { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+
+.checkout-items li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.checkout-items li > div { display: grid; gap: 3px; min-width: 0; }
+.checkout-items strong { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.checkout-items li > strong { white-space: nowrap; }
+.checkout-items span { color: var(--brown-light); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+
+.checkout-summary .drawer-line { margin: 0; }
+.checkout-summary .drawer-subtotal { padding-top: 4px; }
+.checkout-summary .form-hint { margin: 0; }
+.checkout-summary .drawer-continue { margin-top: 0; }
+
+.checkout-done { min-height: 320px; }
+
+@media (max-width: 800px) {
+  .checkout-body { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .checkout-summary { position: static; }
+}
+
+@media (max-width: 700px) {
+  .checkout-layer { padding: 0; }
+  .checkout-modal { min-height: 100dvh; padding: 20px 16px 28px; border-radius: 0; }
+  .checkout-header h2 { font-size: 26px; }
+  .checkout-step h3 { font-size: 19px; }
+}
+
+.terminal-results-count {
+  position: sticky;
+  top: 0;
+  margin: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #fff8f5;
+  color: var(--brown-light);
+  font-size: 11px;
 }

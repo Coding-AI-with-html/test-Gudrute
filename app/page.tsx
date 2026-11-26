@@ -37,6 +37,39 @@ type BuildSelection = {
   quantity: number;
 };
 
+// Pristatymo būdas iš Supabase lentelės delivery_methods. Kainą nustato administratorius.
+type DeliveryMethod = {
+  id: number;
+  code: string;
+  name: string;
+  price: number;
+  needsTerminal: boolean;
+  needsAddress: boolean;
+  // Vežėjas nustatomas pagal kodą (dpd_*, lpexpress_*). Pagal jį kraunamas paštomatų sąrašas.
+  carrier: "dpd" | "lpexpress" | null;
+};
+
+// Paštomatas iš /api/terminals.
+type TerminalOption = {
+  id: string;
+  name: string;
+  city: string;
+  address: string;
+  zip: string;
+};
+
+// Paieškai: ė -> e, š -> s ir pan., kad „gedimino“ ir „Gedimino“ / „Šiaulių“ ir „Siauliu“ sutaptų.
+function normalizeSearch(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function carrierFromCode(code: string): DeliveryMethod["carrier"] {
+  const value = code.toLowerCase();
+  if (value.startsWith("dpd")) return "dpd";
+  if (value.startsWith("lp")) return "lpexpress";
+  return null;
+}
+
 type Product = {
   id: number;
   name: string;
@@ -230,6 +263,10 @@ const money = (amount: number) =>
     currency: "EUR",
   }).format(amount);
 
+// Kol nėra Paysera leidimo, užsakymas pateikiamas apmokėti pagal sąskaitą.
+// Kai Paysera bus paruošta: NEXT_PUBLIC_PAYSERA_ENABLED=true (.env / Vercel nustatymuose).
+const PAYSERA_ENABLED = process.env.NEXT_PUBLIC_PAYSERA_ENABLED === "true";
+
 export default function Home() {
   
   const supabase = useMemo(() => createSupabaseClient(), []);
@@ -264,6 +301,18 @@ export default function Home() {
   const [contactError, setContactError] = useState("");
   const [checkoutSending, setCheckoutSending] = useState(false);
   const [checkoutError, setCheckoutError] = useState("");
+  const [deliveryMethods, setDeliveryMethods] = useState<DeliveryMethod[]>([]);
+  const [deliveryMethodId, setDeliveryMethodId] = useState<number | null>(null);
+  const [orderPlaced, setOrderPlaced] = useState<{ number: string } | null>(null);
+  // Atskiras užsakymo pateikimo langas (kontaktai, pristatymas, užsakymo santrauka).
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  // Paštomatai pagal vežėją: sąrašas, "loading" arba "error" (tada rodomas tekstinis laukelis).
+  const [terminals, setTerminals] = useState<
+    Record<string, TerminalOption[] | "loading" | "error">
+  >({});
+  const [terminalCity, setTerminalCity] = useState("");
+  const [terminalId, setTerminalId] = useState("");
+  const [terminalQuery, setTerminalQuery] = useState("");
 
   // Jei klientas grįžta atgal iš Paysera puslapio, mygtukas vėl tampa aktyvus.
   useEffect(() => {
@@ -508,6 +557,72 @@ export default function Home() {
     (product) => product.category === "Dovanų rinkiniai"
   )?.id;
 
+  // Pristatymo būdai: neprivalomas turinys. Jei lentelės nėra / ji tuščia, pasirinkimas nerodomas.
+  useEffect(() => {
+    let active = true;
+
+    async function loadDeliveryMethods() {
+      const { data, error } = await supabase
+        .from("delivery_methods")
+        .select("id, code, name, price, needs_terminal, needs_address")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true })
+        .order("id", { ascending: true });
+
+      if (!active) return;
+
+      if (error) {
+        console.error("Nepavyko įkelti pristatymo būdų:", error.message);
+        return;
+      }
+
+      const methods = (
+        (data ?? []) as {
+          id: number;
+          code: string;
+          name: string;
+          price: number | string | null;
+          needs_terminal: boolean | null;
+          needs_address: boolean | null;
+        }[]
+      ).map((row) => ({
+        id: Number(row.id),
+        code: row.code,
+        carrier: carrierFromCode(row.code),
+        name: row.name,
+        price: Number(row.price ?? 0),
+        needsTerminal: Boolean(row.needs_terminal),
+        needsAddress: Boolean(row.needs_address),
+      }));
+
+      setDeliveryMethods(methods);
+      setDeliveryMethodId((current) => current ?? methods[0]?.id ?? null);
+    }
+
+    void loadDeliveryMethods();
+
+    return () => {
+      active = false;
+    };
+  }, [supabase]);
+
+  // Uždarius krepšelį ir užsakymo langą, padėkos būsena dingsta.
+  useEffect(() => {
+    if (!cartOpen && !checkoutOpen) setOrderPlaced(null);
+  }, [cartOpen, checkoutOpen]);
+
+  // Escape uždaro užsakymo langą (kol siunčiama – ne).
+  useEffect(() => {
+    if (!checkoutOpen) return;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !checkoutSending) setCheckoutOpen(false);
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [checkoutOpen, checkoutSending]);
+
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
   const cartTotal = cart.reduce((sum, item) => {
@@ -515,6 +630,73 @@ export default function Home() {
     const unitPrice = product ? getCartItemUnitPrice(product, item) : 0;
     return sum + unitPrice * item.quantity;
   }, 0);
+
+  const selectedDelivery =
+    deliveryMethods.find((method) => method.id === deliveryMethodId) ?? null;
+  const deliveryPrice = selectedDelivery?.price ?? 0;
+  const orderTotal = cartTotal + deliveryPrice;
+  // Kurjeriui ir paštomatui telefonas reikalingas SMS pranešimams.
+  const deliveryNeedsPhone = Boolean(
+    selectedDelivery?.needsTerminal || selectedDelivery?.needsAddress
+  );
+
+  // Paštomatų sąrašas kraunamas tik atidarius užsakymo langą ir pasirinkus paštomato pristatymą.
+  const terminalCarrier = selectedDelivery?.needsTerminal ? selectedDelivery.carrier : null;
+  const terminalState = terminalCarrier ? terminals[terminalCarrier] : undefined;
+  const terminalList = Array.isArray(terminalState) ? terminalState : [];
+
+  useEffect(() => {
+    if (!terminalCarrier || !checkoutOpen || terminals[terminalCarrier]) return;
+
+    const carrier = terminalCarrier;
+    setTerminals((current) => ({ ...current, [carrier]: "loading" }));
+
+    fetch(`/api/terminals?carrier=${carrier}`)
+      .then(async (response) => {
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !Array.isArray(result.terminals) || result.terminals.length === 0) {
+          throw new Error(result.error || `Nepavyko įkelti paštomatų (HTTP ${response.status}).`);
+        }
+        return result.terminals as TerminalOption[];
+      })
+      .then((list) => setTerminals((current) => ({ ...current, [carrier]: list })))
+      .catch((error) => {
+        console.error("Paštomatų sąrašas nepasiekiamas, naudojamas tekstinis laukelis:", error);
+        setTerminals((current) => ({ ...current, [carrier]: "error" }));
+      });
+  }, [terminalCarrier, checkoutOpen, terminals]);
+
+  const terminalCities = Array.from(
+    new Set(terminalList.map((terminal) => terminal.city).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, "lt"));
+  const terminalCityCounts = new Map<string, number>();
+  terminalList.forEach((terminal) =>
+    terminalCityCounts.set(terminal.city, (terminalCityCounts.get(terminal.city) ?? 0) + 1)
+  );
+  const terminalsInCity = terminalList.filter((terminal) => terminal.city === terminalCity);
+  const selectedTerminal =
+    terminalsInCity.find((terminal) => terminal.id === terminalId) ?? null;
+
+  // Paieška pagal adresą / gatvę / miestą / pavadinimą / pašto kodą (visi įvesti žodžiai turi sutapti).
+  const terminalSearchWords = normalizeSearch(terminalQuery).split(/\s+/).filter(Boolean);
+  const terminalSearchActive = terminalSearchWords.join("").length >= 2;
+  const terminalMatchesAll = terminalSearchActive
+    ? terminalList
+        .filter((terminal) => {
+          const haystack = normalizeSearch(
+            `${terminal.name} ${terminal.address} ${terminal.city} ${terminal.zip}`
+          );
+          return terminalSearchWords.every((word) => haystack.includes(word));
+        })
+    : [];
+  // Rodome iki 100 rezultatų (sąrašas slenka); jei jų daugiau – prašome patikslinti paiešką.
+  const terminalMatches = terminalMatchesAll.slice(0, 100);
+
+  function pickTerminal(terminal: TerminalOption) {
+    setTerminalCity(terminal.city);
+    setTerminalId(terminal.id);
+    setTerminalQuery("");
+  }
 
   const galleryProduct =
     galleryProductId === null
@@ -638,6 +820,7 @@ export default function Home() {
       },
     ]);
 
+    setOrderPlaced(null);
     setNotice(`„${product.name}“ pridėta į krepšelį`);
     setCartOpen(true);
   }
@@ -659,13 +842,42 @@ export default function Home() {
   }
 
   // Siunčia krepšelį į serverį. Serveris pats perskaičiuoja kainas iš Supabase,
-  // sukuria užsakymą ir grąžina Paysera mokėjimo nuorodą.
+  // sukuria užsakymą ir (jei Paysera įjungta) grąžina mokėjimo nuorodą. Kitu atveju užsakymas
+  // pateikiamas apmokėti pagal sąskaitą.
   async function handleCheckout(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (cart.length === 0 || checkoutSending) return;
 
-    const data = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const data = new FormData(form);
+
+    const phone = String(data.get("phone") ?? "").trim();
+    const terminal = String(data.get("delivery_terminal") ?? "").trim();
+    const terminalIdValue = String(data.get("delivery_terminal_id") ?? "").trim();
+    const street = String(data.get("delivery_street") ?? "").trim();
+    const city = String(data.get("delivery_city") ?? "").trim();
+    const zip = String(data.get("delivery_zip") ?? "").trim();
+
+    if (deliveryMethods.length > 0 && !selectedDelivery) {
+      setCheckoutError("Pasirink pristatymo būdą.");
+      return;
+    }
+
+    if (selectedDelivery?.needsTerminal && !terminal) {
+      setCheckoutError("Nurodyk paštomatą, į kurį siųsti.");
+      return;
+    }
+
+    if (selectedDelivery?.needsAddress && (!street || !city || !zip)) {
+      setCheckoutError("Nurodyk pristatymo adresą (gatvė, miestas, pašto kodas).");
+      return;
+    }
+
+    if (deliveryNeedsPhone && !phone) {
+      setCheckoutError("Nurodyk telefono numerį – jis reikalingas pristatymui.");
+      return;
+    }
 
     setCheckoutSending(true);
     setCheckoutError("");
@@ -675,11 +887,20 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          paymentMethod: PAYSERA_ENABLED ? "paysera" : "invoice",
           customer: {
             name: String(data.get("name") ?? "").trim(),
             email: String(data.get("email") ?? "").trim(),
-            phone: String(data.get("phone") ?? "").trim(),
+            phone,
           },
+          delivery: selectedDelivery
+            ? {
+                methodId: selectedDelivery.id,
+                terminal: selectedDelivery.needsTerminal ? terminal : "",
+                terminalId: selectedDelivery.needsTerminal ? terminalIdValue : "",
+                address: selectedDelivery.needsAddress ? { street, city, zip } : null,
+              }
+            : null,
           items: cart.map((item) => ({
             productId: item.id,
             quantity: item.quantity,
@@ -697,17 +918,34 @@ export default function Home() {
 
       const result = await response.json().catch(() => ({}));
 
-      if (!response.ok || !result.url) {
-        throw new Error(result.error || "Nepavyko pradėti apmokėjimo. Bandyk dar kartą.");
+      if (!response.ok) {
+        throw new Error(result.error || "Nepavyko pateikti užsakymo. Bandyk dar kartą.");
       }
 
-      // Nukreipiame į Paysera apmokėjimo puslapį.
-      window.location.href = result.url;
+      if (PAYSERA_ENABLED) {
+        if (!result.url) {
+          throw new Error(result.error || "Nepavyko pradėti apmokėjimo. Bandyk dar kartą.");
+        }
+
+        // Nukreipiame į Paysera apmokėjimo puslapį.
+        window.location.href = result.url;
+        return;
+      }
+
+      // Užsakymas pateiktas pagal sąskaitą: išvalome krepšelį ir parodome padėką.
+      setCart([]);
+      setNotice("");
+      setOrderPlaced({ number: String(result.orderNumber ?? "") });
+      setTerminalCity("");
+      setTerminalId("");
+      setTerminalQuery("");
+      setCheckoutSending(false);
+      form.reset();
     } catch (error) {
       setCheckoutError(
         error instanceof Error
           ? error.message
-          : "Nepavyko pradėti apmokėjimo. Patikrink interneto ryšį ir bandyk dar kartą."
+          : "Nepavyko pateikti užsakymo. Patikrink interneto ryšį ir bandyk dar kartą."
       );
       setCheckoutSending(false);
     }
@@ -1042,52 +1280,33 @@ export default function Home() {
                     />
                   </button>
 
-                  <span className="product-label">{product.label}</span>
+                  {product.label && (
+                    <span className="product-label">{product.label}</span>
+                  )}
                   <span className="product-category">{product.category}</span>
                 </div>
 
                 {product.image_urls.length > 1 && (
-                  <div
-                    className="product-thumbnails"
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      flexWrap: "wrap",
-                      margin: "10px 0",
-                    }}
-                  >
+                  <div className="product-thumbnails">
                     {product.image_urls.map((url, index) => (
                       <button
                         key={`${url}-${index}`}
                         type="button"
+                        className={
+                          imageIndex === index
+                            ? "product-thumb active"
+                            : "product-thumb"
+                        }
                         aria-label={`Rodyti ${product.name} nuotrauką ${index + 1}`}
+                        aria-pressed={imageIndex === index}
                         onClick={() =>
                           setActiveImages((current) => ({
                             ...current,
                             [product.id]: index,
                           }))
                         }
-                        style={{
-                          padding: 0,
-                          background: "transparent",
-                          border:
-                            imageIndex === index
-                              ? "2px solid #292722"
-                              : "1px solid #ddd",
-                          borderRadius: 8,
-                          overflow: "hidden",
-                        }}
                       >
-                        <img
-                          src={url}
-                          alt=""
-                          style={{
-                            display: "block",
-                            width: 55,
-                            height: 55,
-                            objectFit: "cover",
-                          }}
-                        />
+                        <img src={url} alt="" loading="lazy" />
                       </button>
                     ))}
                   </div>
@@ -1099,32 +1318,15 @@ export default function Home() {
                     <p>{product.description}</p>
 
                     {product.contents.trim() && (
-                      <div
-                        className="product-contents"
-                        style={{
-                          marginTop: 14,
-                          paddingTop: 12,
-                          borderTop: "1px solid #e5e0d7",
-                          fontSize: 14,
-                          lineHeight: 1.5,
-                        }}
-                      >
-                        <strong
-                          style={{
-                            display: "block",
-                            marginBottom: 6,
-                            fontSize: 12,
-                            letterSpacing: 1.5,
-                            textTransform: "uppercase",
-                          }}
-                        >
+                      <div className="product-contents">
+                        <strong className="product-contents-title">
                           Kas įeina į rinkinį
                         </strong>
                         {parseContents(product.contents).map((block, blockIndex) =>
                           block.type === "list" ? (
                             <ul
                               key={`${product.id}-block-${blockIndex}`}
-                              style={{ margin: 0, paddingLeft: 18 }}
+                              className="product-contents-list"
                             >
                               {block.items.map((line, index) => (
                                 <li key={`${product.id}-content-${blockIndex}-${index}`}>
@@ -1148,8 +1350,8 @@ export default function Home() {
                   {(product.category === "Pakavimo paslaugos" || product.builder) && (
                   <div className="product-options">
                     {product.builder && (
-                      <div className="build-picker" style={{ display: "grid", gap: 8, marginBottom: 12 }}>
-                        <strong style={{ fontSize: 12, letterSpacing: 1.5, textTransform: "uppercase" }}>
+                      <div className="build-picker">
+                        <strong className="build-picker-title">
                           Pasirink produktus savo rinkiniui
                         </strong>
 
@@ -1169,33 +1371,25 @@ export default function Home() {
                             });
 
                           return (
-                            <div
-                              key={entry.id}
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "space-between",
-                                gap: 10,
-                              }}
-                            >
-                              <span>{entry.name}</span>
+                            <div key={entry.id} className="build-row">
+                              <span className="build-row-name">{entry.name}</span>
 
-                              <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                              <span className="build-qty">
                                 <button
                                   type="button"
+                                  className="build-qty-button"
                                   onClick={() => setQuantity(quantity - 1)}
                                   disabled={quantity === 0}
                                   aria-label={`Sumažinti: ${entry.name}`}
-                                  style={{ width: 30, height: 30, borderRadius: "50%", border: "1px solid #d8d3ca", background: "white", cursor: "pointer" }}
                                 >
                                   −
                                 </button>
-                                <span style={{ minWidth: 18, textAlign: "center" }}>{quantity}</span>
+                                <span className="build-qty-value">{quantity}</span>
                                 <button
                                   type="button"
+                                  className="build-qty-button"
                                   onClick={() => setQuantity(quantity + 1)}
                                   aria-label={`Padidinti: ${entry.name}`}
-                                  style={{ width: 30, height: 30, borderRadius: "50%", border: "1px solid #d8d3ca", background: "white", cursor: "pointer" }}
                                 >
                                   +
                                 </button>
@@ -1764,52 +1958,19 @@ export default function Home() {
               <strong>{money(cartTotal)}</strong>
             </div>
 
-            <p>Pristatymo kaina, jei taikoma, apskaičiuojama atskirai.</p>
+            <p>Pristatymą ir kontaktinius duomenis pasirinksi kitame žingsnyje.</p>
 
-            <form
-              className="drawer-checkout-form"
-              onSubmit={handleCheckout}
-              style={{ display: "grid", gap: 8, margin: "12px 0" }}
+            <button
+              type="button"
+              className="button button-dark drawer-checkout"
+              onClick={() => {
+                setCheckoutError("");
+                setCartOpen(false);
+                setCheckoutOpen(true);
+              }}
             >
-              {[
-                { name: "name", type: "text", placeholder: "Vardas", autoComplete: "name", required: true },
-                { name: "email", type: "email", placeholder: "El. paštas", autoComplete: "email", required: true },
-                { name: "phone", type: "tel", placeholder: "Telefonas (nebūtina)", autoComplete: "tel", required: false },
-              ].map((field) => (
-                <input
-                  key={field.name}
-                  name={field.name}
-                  type={field.type}
-                  placeholder={field.placeholder}
-                  autoComplete={field.autoComplete}
-                  required={field.required}
-                  style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    padding: 12,
-                    border: "1px solid #d8d3ca",
-                    borderRadius: 9,
-                    background: "white",
-                    color: "#292722",
-                    font: "inherit",
-                  }}
-                />
-              ))}
-
-              <button
-                type="submit"
-                className="button button-dark drawer-checkout"
-                disabled={checkoutSending}
-              >
-                {checkoutSending ? "Nukreipiama..." : "Apmokėti per Paysera"} <span>↗</span>
-              </button>
-
-              {checkoutError && (
-                <p className="form-hint" role="alert">
-                  {checkoutError}
-                </p>
-              )}
-            </form>
+              Tęsti į apmokėjimą <span>↗</span>
+            </button>
 
             <button
               className="drawer-continue"
@@ -1842,6 +2003,427 @@ export default function Home() {
   </div>
 )}
 
+
+{/* Atskiras užsakymo pateikimo langas */}
+{checkoutOpen && (
+  <div
+    className="checkout-layer"
+    onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !checkoutSending) {
+        setCheckoutOpen(false);
+      }
+    }}
+  >
+    <section
+      className="checkout-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="checkout-title"
+    >
+      <div className="checkout-header">
+        <div>
+          <p className="eyebrow">UŽSAKYMAS</p>
+          <h2 id="checkout-title">Užsakymo pateikimas <span>♡</span></h2>
+        </div>
+
+        <button
+          type="button"
+          className="drawer-close"
+          onClick={() => setCheckoutOpen(false)}
+          aria-label="Uždaryti užsakymo langą"
+        >
+          ×
+        </button>
+      </div>
+
+      {orderPlaced ? (
+        <div className="drawer-empty checkout-done">
+          <span className="empty-heart">♡</span>
+          <h3>Ačiū, užsakymas priimtas!</h3>
+          {orderPlaced.number && (
+            <p>
+              Užsakymo nr. <strong>{orderPlaced.number}</strong>
+            </p>
+          )}
+          <p>Sąskaitą apmokėjimui atsiųsime tavo nurodytu el. paštu.</p>
+          <button
+            type="button"
+            className="button button-dark"
+            onClick={() => {
+              setCheckoutOpen(false);
+              document.getElementById("parduotuve")?.scrollIntoView({
+                behavior: "smooth",
+              });
+            }}
+          >
+            Grįžti į parduotuvę ↗
+          </button>
+        </div>
+      ) : cart.length === 0 ? (
+        <div className="drawer-empty checkout-done">
+          <span className="empty-heart">♡</span>
+          <h3>Krepšelis tuščias.</h3>
+          <button
+            type="button"
+            className="button button-dark"
+            onClick={() => {
+              setCheckoutOpen(false);
+              document.getElementById("parduotuve")?.scrollIntoView({
+                behavior: "smooth",
+              });
+            }}
+          >
+            Atrasti dovanas ↗
+          </button>
+        </div>
+      ) : (
+        <div className="checkout-body">
+          <form
+            id="checkout-form"
+            className="checkout-form"
+            onSubmit={handleCheckout}
+          >
+            <section className="checkout-step">
+              <h3>
+                <span>1</span> Kontaktiniai duomenys
+              </h3>
+
+              <div className="checkout-field">
+                <label htmlFor="checkout-name">Vardas ir pavardė</label>
+                <input
+                  id="checkout-name"
+                  className="drawer-input"
+                  name="name"
+                  type="text"
+                  autoComplete="name"
+                  required
+                />
+              </div>
+
+              <div className="checkout-field">
+                <label htmlFor="checkout-email">El. paštas</label>
+                <input
+                  id="checkout-email"
+                  className="drawer-input"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                />
+              </div>
+
+              <div className="checkout-field">
+                <label htmlFor="checkout-phone">
+                  {deliveryNeedsPhone ? "Telefonas" : "Telefonas (nebūtina)"}
+                </label>
+                <input
+                  id="checkout-phone"
+                  className="drawer-input"
+                  name="phone"
+                  type="tel"
+                  autoComplete="tel"
+                  required={deliveryNeedsPhone}
+                />
+              </div>
+            </section>
+
+            <section className="checkout-step">
+              <h3>
+                <span>2</span> Pristatymas
+              </h3>
+
+                {deliveryMethods.length > 0 && (
+                  <fieldset className="delivery-picker">
+                    <legend>Pristatymo būdas</legend>
+
+                    {deliveryMethods.map((method) => (
+                      <label
+                        key={method.id}
+                        className={
+                          deliveryMethodId === method.id
+                            ? "delivery-option active"
+                            : "delivery-option"
+                        }
+                      >
+                        <input
+                          type="radio"
+                          name="delivery_method"
+                          value={method.id}
+                          checked={deliveryMethodId === method.id}
+                          onChange={() => {
+                            setDeliveryMethodId(method.id);
+                            setTerminalCity("");
+                            setTerminalId("");
+                            setTerminalQuery("");
+                            setCheckoutError("");
+                          }}
+                        />
+                        <span className="delivery-option-name">{method.name}</span>
+                        <span className="delivery-option-price">
+                          {method.price > 0 ? money(method.price) : "Nemokamai"}
+                        </span>
+                      </label>
+                    ))}
+                  </fieldset>
+                )}
+
+              <div className="checkout-fields">
+                {selectedDelivery?.needsTerminal &&
+                  (terminalList.length > 0 ? (
+                    <>
+                      <input
+                        className="drawer-input"
+                        type="search"
+                        aria-label="Paieška pagal adresą"
+                        placeholder="Ieškok pagal adresą, gatvę ar pavadinimą"
+                        autoComplete="off"
+                        value={terminalQuery}
+                        onChange={(event) => setTerminalQuery(event.target.value)}
+                        onKeyDown={(event) => {
+                          // Enter neturi išsiųsti viso užsakymo – jis pasirenka pirmą rastą paštomatą.
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            if (terminalMatches[0]) pickTerminal(terminalMatches[0]);
+                          }
+                        }}
+                      />
+
+                      {terminalSearchActive && (
+                        <div className="terminal-results" aria-label="Paieškos rezultatai">
+                          {terminalMatchesAll.length > 0 && (
+                            <p className="terminal-results-count">
+                              Rasta paštomatų: {terminalMatchesAll.length}
+                              {terminalMatchesAll.length > terminalMatches.length
+                                ? ` (rodoma ${terminalMatches.length} – patikslink paiešką)`
+                                : ""}
+                            </p>
+                          )}
+                          {terminalMatches.length === 0 ? (
+                            <p className="terminal-results-empty">
+                              Nieko nerasta. Pabandyk kitą adresą arba pasirink iš sąrašo žemiau.
+                            </p>
+                          ) : (
+                            terminalMatches.map((terminal) => (
+                              <button
+                                type="button"
+                                key={terminal.id}
+                                className="terminal-result"
+                                onClick={() => pickTerminal(terminal)}
+                              >
+                                <strong>{terminal.name}</strong>
+                                <span>
+                                  {terminal.address}, {terminal.city}
+                                </span>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
+
+                      <p className="form-hint terminal-or">Arba pasirink iš sąrašo:</p>
+
+                      <select
+                        className="drawer-input"
+                        aria-label="Miestas"
+                        value={terminalCity}
+                        required
+                        onChange={(event) => {
+                          setTerminalCity(event.target.value);
+                          setTerminalId("");
+                        }}
+                      >
+                        <option value="">Pasirink miestą</option>
+                        {terminalCities.map((city) => (
+                          <option key={city} value={city}>
+                            {city} ({terminalCityCounts.get(city) ?? 0})
+                          </option>
+                        ))}
+                      </select>
+
+                      <select
+                        className="drawer-input"
+                        aria-label="Paštomatas"
+                        value={terminalId}
+                        required
+                        disabled={!terminalCity}
+                        onChange={(event) => setTerminalId(event.target.value)}
+                      >
+                        <option value="">
+                          {terminalCity ? "Pasirink paštomatą" : "Pirma pasirink miestą"}
+                        </option>
+                        {terminalsInCity.map((terminal) => (
+                          <option key={terminal.id} value={terminal.id}>
+                            {terminal.name} — {terminal.address}
+                          </option>
+                        ))}
+                      </select>
+
+                      <input
+                        type="hidden"
+                        name="delivery_terminal"
+                        value={
+                          selectedTerminal
+                            ? `${selectedTerminal.name}, ${selectedTerminal.address}, ${selectedTerminal.city}`
+                            : ""
+                        }
+                      />
+                      <input type="hidden" name="delivery_terminal_id" value={terminalId} />
+                    </>
+                  ) : terminalState === "loading" ? (
+                    <p className="form-hint">Kraunami paštomatai...</p>
+                  ) : (
+                    <>
+                      <input
+                        key={`terminal-${selectedDelivery.id}`}
+                        className="drawer-input"
+                        name="delivery_terminal"
+                        type="text"
+                        placeholder="Paštomato pavadinimas ir adresas"
+                        required
+                      />
+                      {terminalState === "error" && (
+                        <p className="form-hint">
+                          Paštomatų sąrašas šiuo metu nepasiekiamas – įrašyk paštomato pavadinimą ir adresą.
+                        </p>
+                      )}
+                    </>
+                  ))}
+
+                {selectedDelivery?.needsAddress && (
+                  <>
+                    <input
+                      key={`street-${selectedDelivery.id}`}
+                      className="drawer-input"
+                      name="delivery_street"
+                      type="text"
+                      placeholder="Gatvė, namo ir buto nr."
+                      autoComplete="street-address"
+                      required
+                    />
+                    <div className="drawer-input-row">
+                      <input
+                        key={`city-${selectedDelivery.id}`}
+                        className="drawer-input"
+                        name="delivery_city"
+                        type="text"
+                        placeholder="Miestas"
+                        autoComplete="address-level2"
+                        required
+                      />
+                      <input
+                        key={`zip-${selectedDelivery.id}`}
+                        className="drawer-input"
+                        name="delivery_zip"
+                        type="text"
+                        placeholder="Pašto kodas"
+                        autoComplete="postal-code"
+                        required
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            </section>
+          </form>
+
+          <aside className="checkout-summary" aria-label="Užsakymo santrauka">
+            <h3>Tavo užsakymas</h3>
+
+            <ul className="checkout-items">
+              {cart.map((item) => {
+                const product = products.find((entry) => entry.id === item.id);
+
+                if (!product) return null;
+
+                const unitPrice = getCartItemUnitPrice(product, item);
+
+                return (
+                  <li key={item.lineId}>
+                    <div>
+                      <strong>{product.name}</strong>
+                      <span>
+                        {item.quantity} × {money(unitPrice)}
+                      </span>
+                      {item.buildItems && item.buildItems.length > 0 && (
+                        <span>
+                          Rinkinys:{" "}
+                          {item.buildItems
+                            .map((entry) => `${entry.name} × ${entry.quantity}`)
+                            .join(", ")}
+                        </span>
+                      )}
+                      {item.packaging && <span>Įpakavimas: {item.packaging}</span>}
+                    </div>
+                    <strong>{money(unitPrice * item.quantity)}</strong>
+                  </li>
+                );
+              })}
+            </ul>
+
+            <div className="drawer-line">
+              <span>Prekių suma</span>
+              <span>{money(cartTotal)}</span>
+            </div>
+            <div className="drawer-line">
+              <span>Pristatymas</span>
+              <span>
+                {selectedDelivery
+                  ? deliveryPrice > 0
+                    ? money(deliveryPrice)
+                    : "Nemokamai"
+                  : "Apskaičiuojama atskirai"}
+              </span>
+            </div>
+
+            <div className="drawer-subtotal">
+              <span>Iš viso</span>
+              <strong>{money(orderTotal)}</strong>
+            </div>
+
+            {checkoutError && (
+              <p className="form-hint" role="alert">
+                {checkoutError}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              form="checkout-form"
+              className="button button-dark drawer-checkout"
+              disabled={checkoutSending}
+            >
+              {checkoutSending
+                ? PAYSERA_ENABLED
+                  ? "Nukreipiama..."
+                  : "Siunčiama..."
+                : PAYSERA_ENABLED
+                  ? "Apmokėti per Paysera"
+                  : "Pateikti užsakymą"}{" "}
+              <span>↗</span>
+            </button>
+
+            {!PAYSERA_ENABLED && (
+              <p className="form-hint">
+                Apmokėjimas pagal sąskaitą – sąskaitą atsiųsime el. paštu.
+              </p>
+            )}
+
+            <button
+              type="button"
+              className="drawer-continue"
+              onClick={() => {
+                setCheckoutOpen(false);
+                setCartOpen(true);
+              }}
+            >
+              ← Grįžti į krepšelį
+            </button>
+          </aside>
+        </div>
+      )}
+    </section>
+  </div>
+)}
 
 {/* Padidinta konkrečios prekės nuotraukų galerija */}
 {galleryProduct && galleryImages.length > 0

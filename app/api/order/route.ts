@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 // POST /api/order  –  užsakymas apmokėti pagal sąskaitą (kol nėra Paysera).
 //
@@ -19,7 +19,7 @@ const PACKAGING_CATEGORY = "Pakavimo paslaugos";
 const OTHER_PACKAGING = "Kitas variantas";
 
 type Row = Record<string, unknown>;
-type Db = ReturnType<typeof createClient>;
+type Db = SupabaseClient<any, "public", any>;
 
 class UserError extends Error {}
 

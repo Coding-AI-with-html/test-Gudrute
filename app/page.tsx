@@ -267,6 +267,15 @@ const money = (amount: number) =>
 // Kai Paysera bus paruošta: NEXT_PUBLIC_PAYSERA_ENABLED=true (.env / Vercel nustatymuose).
 const PAYSERA_ENABLED = process.env.NEXT_PUBLIC_PAYSERA_ENABLED === "true";
 
+// Banko pavedimo duomenys išankstinei apmokėjimo sąskaitai (.env / Vercel nustatymuose):
+//   NEXT_PUBLIC_BANK_RECIPIENT=Gavėjo vardas / įmonės pavadinimas
+//   NEXT_PUBLIC_BANK_IBAN=LT00 0000 0000 0000 0000
+// Jei nenustatyta, klientui parodomas pranešimas, kad mokėjimo duomenys bus atsiųsti el. paštu.
+const BANK_DETAILS = {
+  recipient: process.env.NEXT_PUBLIC_BANK_RECIPIENT ?? "",
+  iban: process.env.NEXT_PUBLIC_BANK_IBAN ?? "",
+};
+
 export default function Home() {
   
   const supabase = useMemo(() => createSupabaseClient(), []);
@@ -303,9 +312,10 @@ export default function Home() {
   const [checkoutError, setCheckoutError] = useState("");
   const [deliveryMethods, setDeliveryMethods] = useState<DeliveryMethod[]>([]);
   const [deliveryMethodId, setDeliveryMethodId] = useState<number | null>(null);
-  const [orderPlaced, setOrderPlaced] = useState<{ number: string } | null>(null);
+  const [orderPlaced, setOrderPlaced] = useState<{ number: string; total: number } | null>(null);
   // Atskiras užsakymo pateikimo langas (kontaktai, pristatymas, užsakymo santrauka).
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [copiedField, setCopiedField] = useState("");
   // Paštomatai pagal vežėją: sąrašas, "loading" arba "error" (tada rodomas tekstinis laukelis).
   const [terminals, setTerminals] = useState<
     Record<string, TerminalOption[] | "loading" | "error">
@@ -844,6 +854,16 @@ export default function Home() {
   // Siunčia krepšelį į serverį. Serveris pats perskaičiuoja kainas iš Supabase,
   // sukuria užsakymą ir (jei Paysera įjungta) grąžina mokėjimo nuorodą. Kitu atveju užsakymas
   // pateikiamas apmokėti pagal sąskaitą.
+  async function copyToClipboard(field: string, value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedField(field);
+      window.setTimeout(() => setCopiedField(""), 1800);
+    } catch {
+      // Kopijuoti nepavyko (pvz., naršyklė neleidžia) – klientas gali pažymėti tekstą rankiniu būdu.
+    }
+  }
+
   async function handleCheckout(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -883,7 +903,8 @@ export default function Home() {
     setCheckoutError("");
 
     try {
-      const response = await fetch("/api/checkout", {
+      // Kol Paysera išjungta, užsakymas eina į /api/order (išankstinė sąskaita), o ne į Paysera.
+      const response = await fetch(PAYSERA_ENABLED ? "/api/checkout" : "/api/order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -935,7 +956,11 @@ export default function Home() {
       // Užsakymas pateiktas pagal sąskaitą: išvalome krepšelį ir parodome padėką.
       setCart([]);
       setNotice("");
-      setOrderPlaced({ number: String(result.orderNumber ?? "") });
+      setOrderPlaced({
+        number: String(result.orderNumber ?? "").replace(/^#/, ""),
+        // Suma – kaip ją apskaičiavo serveris; jei jos nėra, naudojame krepšelio sumą.
+        total: typeof result.total === "number" ? result.total : orderTotal,
+      });
       setTerminalCity("");
       setTerminalId("");
       setTerminalQuery("");
@@ -2042,10 +2067,85 @@ export default function Home() {
           <h3>Ačiū, užsakymas priimtas!</h3>
           {orderPlaced.number && (
             <p>
-              Užsakymo nr. <strong>{orderPlaced.number}</strong>
+              Užsakymo nr. <strong>#{orderPlaced.number}</strong>
             </p>
           )}
-          <p>Sąskaitą apmokėjimui atsiųsime tavo nurodytu el. paštu.</p>
+
+          {BANK_DETAILS.iban && BANK_DETAILS.recipient ? (
+            <section className="payment-card" aria-label="Išankstinė apmokėjimo sąskaita">
+              <h4>Pasirink mokėjimo būdą</h4>
+
+              <div className="payment-method">
+                <strong>Bankinis pavedimas</strong>
+                <span>Apmokėk iš savo pasirinkto banko</span>
+              </div>
+
+              <h4>Mokėjimo duomenys</h4>
+
+              <dl className="payment-details">
+                <div>
+                  <dt>Gavėjas</dt>
+                  <dd>{BANK_DETAILS.recipient}</dd>
+                </div>
+
+                <div>
+                  <dt>Sąskaita</dt>
+                  <dd>
+                    {BANK_DETAILS.iban
+                      .replace(/\s+/g, "")
+                      .replace(/(.{4})/g, "$1 ")
+                      .trim()}
+                  </dd>
+                  <button
+                    type="button"
+                    className="copy-button"
+                    onClick={() => copyToClipboard("iban", BANK_DETAILS.iban.replace(/\s+/g, ""))}
+                  >
+                    {copiedField === "iban" ? "Nukopijuota ✓" : "Kopijuoti"}
+                  </button>
+                </div>
+
+                <div>
+                  <dt>Suma</dt>
+                  <dd>{money(orderPlaced.total)}</dd>
+                  <button
+                    type="button"
+                    className="copy-button"
+                    onClick={() =>
+                      copyToClipboard("amount", orderPlaced.total.toFixed(2).replace(".", ","))
+                    }
+                  >
+                    {copiedField === "amount" ? "Nukopijuota ✓" : "Kopijuoti"}
+                  </button>
+                </div>
+
+                <div>
+                  <dt>Mokėjimo paskirtis</dt>
+                  <dd>
+                    {orderPlaced.number
+                      ? `Užsakymas #${orderPlaced.number}`
+                      : "Užsakymas – nurodyk savo vardą ir el. paštą"}
+                  </dd>
+                  {orderPlaced.number && (
+                    <button
+                      type="button"
+                      className="copy-button"
+                      onClick={() => copyToClipboard("purpose", `Užsakymas #${orderPlaced.number}`)}
+                    >
+                      {copiedField === "purpose" ? "Nukopijuota ✓" : "Kopijuoti"}
+                    </button>
+                  )}
+                </div>
+              </dl>
+            </section>
+          ) : (
+            <p>Mokėjimo duomenis atsiųsime tavo nurodytu el. paštu.</p>
+          )}
+
+          <p className="form-hint">
+            Klausimų? Rašyk <a className="inline-link" href="mailto:info@gudrutesdezutes.lt">info@gudrutesdezutes.lt</a>
+          </p>
+
           <button
             type="button"
             className="button button-dark"
